@@ -332,6 +332,32 @@ def list_catalog():
     data = c.fetchall()
     conn.close()
     return data
+    
+def add_weapon_to_inventory(uid, nome, peso, quantidade, municao_atual, municao_max):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO inventario (player_id, nome, peso, quantidade, municao_atual, municao_max)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (player_id, nome) DO UPDATE
+        SET quantidade = inventario.quantidade + %s,
+            peso = %s,
+            municao_atual = %s,
+            municao_max = %s
+    """, (uid, nome, peso, quantidade, municao_atual, municao_max, quantidade, peso, municao_atual, municao_max))
+    conn.commit()
+    conn.close()
+
+def update_weapon_ammo(uid, nome, nova_municao):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE inventario
+        SET municao_atual = %s
+        WHERE player_id = %s AND nome = %s
+    """, (nova_municao, uid, nome))
+    conn.commit()
+    conn.close()
 
 def is_consumivel_catalogo(nome: str):
     item = get_catalog_item(nome)
@@ -879,7 +905,10 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("  Vazio.")
     else:
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
-            lines.append(f"  — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
+            linha = f"  — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)"
+            if i.get('municao_max'):
+            linha += f" [{i.get('municao_atual', 0)}/{i['municao_max']} balas]"
+        lines.append(linha)
     total_peso = peso_total(player)
     lines.append(f"\n  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg\n\u200B")
     if penalidade(player):
@@ -1007,18 +1036,23 @@ async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 4:
         await update.message.reply_text("Uso: /addarma Nome Peso melee/range Bônus [munição_atual/munição_max (apenas para range)]")
         return
-    nome = context.args[0]
-    peso = parse_float_br(context.args[1])
-    arma_tipo = context.args[2].lower()
-    arma_bonus = int(context.args[3]) if context.args[3].isdigit() else 0
-    muni_atual, muni_max = 0, 0
-    if arma_tipo == 'range' and len(context.args) >= 5:
-        if '/' in context.args[4]:
-            try:
-                muni_atual, muni_max = map(int, context.args[4].split('/'))
-            except:
-                await update.message.reply_text("Formato de munição inválido. Use 15/20.")
-                return
+    # Aceita nome com espaços!
+    if len(context.args) >= 5 and '/' in context.args[-1]:
+        nome = " ".join(context.args[:-4])
+        peso = parse_float_br(context.args[-4])
+        arma_tipo = context.args[-3].lower()
+        arma_bonus = int(context.args[-2]) if context.args[-2].isdigit() else 0
+        try:
+            muni_atual, muni_max = map(int, context.args[-1].split('/'))
+        except:
+            await update.message.reply_text("Formato de munição inválido. Use 15/20.")
+            return
+    else:
+        nome = " ".join(context.args[:-3])
+        peso = parse_float_br(context.args[-3])
+        arma_tipo = context.args[-2].lower()
+        arma_bonus = int(context.args[-1]) if context.args[-1].isdigit() else 0
+        muni_atual, muni_max = 0, 0
     try:
         add_catalog_item(nome, peso, consumivel=False, bonus=0, tipo='', arma_tipo=arma_tipo, arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max)
         await update.message.reply_text(f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + (f", munição: {muni_atual}/{muni_max}" if arma_tipo == 'range' else ""))
@@ -1180,13 +1214,12 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             # Debita do doador
             c.execute(
-                "SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                "SELECT quantidade, peso, municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (doador, item)
             )
             row = c.fetchone()
-
             if row:
-                qtd_doador, peso_item = row
+                qtd_doador, peso_item, municao_atual, municao_max = row[0], row[1], row[2], row[3]
                 nova_qtd_doador = qtd_doador - qtd
                 if nova_qtd_doador <= 0:
                     c.execute(
@@ -1207,29 +1240,52 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         TRANSFER_PENDING.pop(transfer_key, None)
                         return
                     peso_item = item_info["peso"]
+                    municao_atual = item_info.get("muni_atual", None)
+                    municao_max = item_info.get("muni_max", None)
                 else:
                     conn.close()
                     await query.edit_message_text("❌ O doador não tem mais o item.")
                     TRANSFER_PENDING.pop(transfer_key, None)
                     return
 
-            # SEMPRE stacka no inventário do alvo, vindo do catálogo ou não!
-            c.execute(
-                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (alvo, item)
-            )
-            row_tgt = c.fetchone()
-            if row_tgt:
-                nova_qtd_tgt = row_tgt[0] + qtd
+            # Decide se é arma de fogo
+            item_info = get_catalog_item(item)
+            if item_info and item_info["arma_tipo"] == "range":
+                # Transferir arma de fogo com munição
                 c.execute(
-                    "UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (nova_qtd_tgt, peso_item, alvo, item)
+                    "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (alvo, item)
                 )
+                row_tgt = c.fetchone()
+                if row_tgt:
+                    nova_qtd_tgt = row_tgt[0] + qtd
+                    c.execute(
+                        "UPDATE inventario SET quantidade=%s, peso=%s, municao_atual=%s, municao_max=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                        (nova_qtd_tgt, peso_item, municao_atual, municao_max, alvo, item)
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO inventario(player_id, nome, peso, quantidade, municao_atual, municao_max) VALUES(%s,%s,%s,%s,%s,%s)",
+                        (alvo, item, peso_item, qtd, municao_atual, municao_max)
+                    )
             else:
+                # Normal
                 c.execute(
-                    "INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)",
-                    (alvo, item, peso_item, qtd)
+                    "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (alvo, item)
                 )
+                row_tgt = c.fetchone()
+                if row_tgt:
+                    nova_qtd_tgt = row_tgt[0] + qtd
+                    c.execute(
+                        "UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                        (nova_qtd_tgt, peso_item, alvo, item)
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)",
+                        (alvo, item, peso_item, qtd)
+                    )
 
             conn.commit()
         except Exception as e:
@@ -1625,10 +1681,22 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if item_obj['arma_tipo'] == 'melee':
                     pericia_usada = 'Luta'
                     bonus_pericia = get_player(uid)['pericias'].get('Luta', 0)
+                    bonus_arma = item_obj['arma_bonus']
                 elif item_obj['arma_tipo'] == 'range':
+                    # Checa e desconta munição no inventário!
+                    conn = get_conn()
+                    c = conn.cursor()
+                    c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_obj['nome']))
+                    row = c.fetchone()
+                    conn.close()
+                    if not row or row[0] is None or row[0] <= 0:
+                        await update.message.reply_text(f"❌ Você está sem munição na arma '{item_obj['nome']}'!")
+                        return
+                    # Desconta 1 de munição
+                    update_weapon_ammo(uid, item_obj['nome'], row[0] - 1)
                     pericia_usada = 'Pontaria'
                     bonus_pericia = get_player(uid)['pericias'].get('Pontaria', 0)
-                bonus_arma = item_obj['arma_bonus']
+                    bonus_arma = item_obj['arma_bonus']
             # Se é consumível de dano com bônus
             elif item_obj['consumivel'] and item_obj['bonus'] and item_obj['tipo'] == "dano":
                 bonus_consumivel = item_obj['bonus']
