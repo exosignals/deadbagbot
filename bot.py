@@ -121,6 +121,14 @@ def init_db():
                     nome TEXT PRIMARY KEY,
                     peso REAL
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
+                    user_id BIGINT PRIMARY KEY,
+                    nome TEXT,
+                    peso REAL,
+                    bonus INTEGER,
+                    armas_compat TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )''')
     # Adiciona colunas se não existirem
     for alter in [
         "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
@@ -1017,32 +1025,43 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             armas_compat = " ".join(args[peso_idx + 1:])
 
     # Salva info para o próximo passo (tipo do consumível)
-    context.user_data['addconsumivel_pending'] = {
-        "nome": nome, "peso": peso, "bonus": bonus, "armas_compat": armas_compat
-    }
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('''INSERT INTO pending_consumivel (user_id, nome, peso, bonus, armas_compat)
+                 VALUES (%s, %s, %s, %s, %s)
+                 ON CONFLICT (user_id) DO UPDATE SET nome=%s, peso=%s, bonus=%s, armas_compat=%s, created_at=NOW()''',
+              (uid, nome, peso, bonus, armas_compat, nome, peso, bonus, armas_compat))
+    conn.commit()
+    conn.close()
     await update.message.reply_text(
         "Esse item consumível é de cura, dano, munição ou nenhum?\nResponda: cura/dano/municao/nenhum"
     )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("DEBUG: receber_tipo_consumivel foi chamado!")
-    print("DEBUG: user_data =", context.user_data)
-    if 'addconsumivel_pending' not in context.user_data:
+    uid = update.effective_user.id
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+    row = c.fetchone()
+    if not row:
         await update.message.reply_text("❌ Não achei a pendência de criação! Por favor, execute o /addconsumivel de novo.")
+        conn.close()
         return
+    nome, peso, bonus, armas_compat = row
     tipo = update.message.text.strip().lower()
-    print("DEBUG: tipo recebido:", tipo)
     if tipo not in ("cura", "dano", "nenhum", "municao"):
         await update.message.reply_text("Tipo inválido. Use: cura, dano, municao ou nenhum.")
+        conn.close()
         return
-    data = context.user_data.pop('addconsumivel_pending')
-    nome, peso, bonus, armas_compat = data['nome'], data['peso'], data['bonus'], data['armas_compat']
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
+        c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
+        conn.commit()
         await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
     except Exception as e:
-        print(f"DEBUG: erro ao adicionar consumível: {e}")
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
+    finally:
+        conn.close()
   
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
