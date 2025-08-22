@@ -907,8 +907,8 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
             linha = f"  — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)"
             if i.get('municao_max'):
-            linha += f" [{i.get('municao_atual', 0)}/{i['municao_max']} balas]"
-        lines.append(linha)
+                linha += f" [{i.get('municao_atual', 0)}/{i['municao_max']} balas]"
+            lines.append(linha)
     total_peso = peso_total(player)
     lines.append(f"\n  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg\n\u200B")
     if penalidade(player):
