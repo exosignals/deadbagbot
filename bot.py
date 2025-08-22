@@ -1025,10 +1025,13 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Só responde se houver contexto de addconsumivel
+    print("DEBUG: receber_tipo_consumivel foi chamado!")
+    print("DEBUG: user_data =", context.user_data)
     if 'addconsumivel_pending' not in context.user_data:
+        await update.message.reply_text("❌ Não achei a pendência de criação! Por favor, execute o /addconsumivel de novo.")
         return
     tipo = update.message.text.strip().lower()
+    print("DEBUG: tipo recebido:", tipo)
     if tipo not in ("cura", "dano", "nenhum", "municao"):
         await update.message.reply_text("Tipo inválido. Use: cura, dano, municao ou nenhum.")
         return
@@ -1038,6 +1041,7 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
         await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
     except Exception as e:
+        print(f"DEBUG: erro ao adicionar consumível: {e}")
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
   
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
