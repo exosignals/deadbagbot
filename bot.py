@@ -986,21 +986,37 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /addconsumivel NomeDoItem Peso [bonus] [armas_compat]")
         return
-    nome = context.args[0]
-    peso_str = context.args[1]
-    peso = parse_float_br(peso_str)
-    if not peso:
-        await update.message.reply_text("❌ Peso inválido.")
+
+    # Descobre onde está o peso (primeiro argumento que vira float)
+    args = context.args
+    peso_idx = None
+    for i, arg in enumerate(args):
+        try:
+            float(arg.replace(",", "."))
+            peso_idx = i
+            break
+        except:
+            continue
+
+    if peso_idx is None:
+        await update.message.reply_text("❌ Peso inválido. Use algo como 2,5")
         return
+
+    nome = " ".join(args[:peso_idx])
+    peso = parse_float_br(args[peso_idx])
+
+    # bônus opcional
     bonus = 0
     armas_compat = ''
-    if len(context.args) >= 3 and context.args[2].isdigit():
-        bonus = int(context.args[2])
-        if len(context.args) >= 4:
-            armas_compat = " ".join(context.args[3:])
-    else:
-        if len(context.args) >= 3:
-            armas_compat = " ".join(context.args[2:])
+    if len(args) > peso_idx + 1:
+        if args[peso_idx + 1].isdigit():
+            bonus = int(args[peso_idx + 1])
+            if len(args) > peso_idx + 2:
+                armas_compat = " ".join(args[peso_idx + 2:])
+        else:
+            armas_compat = " ".join(args[peso_idx + 1:])
+
+    # Salva info para o próximo passo (tipo do consumível)
     context.user_data['addconsumivel_pending'] = {
         "nome": nome, "peso": peso, "bonus": bonus, "armas_compat": armas_compat
     }
