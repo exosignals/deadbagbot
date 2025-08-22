@@ -1024,7 +1024,6 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
   
-# ARMA: /addarma nome peso melee/range bonus [munição atual/max] (para range)
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -1036,28 +1035,40 @@ async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 4:
         await update.message.reply_text("Uso: /addarma Nome Peso melee/range Bônus [munição_atual/munição_max (apenas para range)]")
         return
-    # Aceita nome com espaços!
     if len(context.args) >= 5 and '/' in context.args[-1]:
         nome = " ".join(context.args[:-4])
         peso = parse_float_br(context.args[-4])
+        if peso is None:
+            await update.message.reply_text("❌ Peso inválido. Use número, ex: 3 ou 2,5")
+            return
         arma_tipo = context.args[-3].lower()
         arma_bonus = int(context.args[-2]) if context.args[-2].isdigit() else 0
         try:
             muni_atual, muni_max = map(int, context.args[-1].split('/'))
-        except:
+        except Exception as e:
             await update.message.reply_text("Formato de munição inválido. Use 15/20.")
             return
     else:
         nome = " ".join(context.args[:-3])
         peso = parse_float_br(context.args[-3])
+        if peso is None:
+            await update.message.reply_text("❌ Peso inválido. Use número, ex: 3 ou 2,5")
+            return
         arma_tipo = context.args[-2].lower()
         arma_bonus = int(context.args[-1]) if context.args[-1].isdigit() else 0
         muni_atual, muni_max = 0, 0
     try:
-        add_catalog_item(nome, peso, consumivel=False, bonus=0, tipo='', arma_tipo=arma_tipo, arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max)
-        await update.message.reply_text(f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + (f", munição: {muni_atual}/{muni_max}" if arma_tipo == 'range' else ""))
+        add_catalog_item(
+            nome, peso, consumivel=False, bonus=0, tipo='', arma_tipo=arma_tipo,
+            arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max
+        )
+        await update.message.reply_text(
+            f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + 
+            (f", munição: {muni_atual}/{muni_max}" if arma_tipo == 'range' else "")
+        )
     except Exception as e:
-        await update.message.reply_text("Erro ao adicionar arma ao catálogo. Tente novamente.")
+        print(f"[ERRO ADDARMA] nome={nome}, peso={peso}, arma_tipo={arma_tipo}, arma_bonus={arma_bonus}, muni_atual={muni_atual}, muni_max={muni_max} :: {e}")
+        await update.message.reply_text(f"Erro ao adicionar arma ao catálogo. Detalhe: {e}")
     
 async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
