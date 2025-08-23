@@ -1040,31 +1040,52 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Esse item consumível é de cura, dano, munição ou nenhum?\nResponda: cura/dano/municao/nenhum"
     )
     
-async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
     uid = update.effective_user.id
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM pending_consumivel WHERE user_id=%s", (uid,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return
+    # Recebe row do handler ou busca do banco
+    if row is None:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return
     nome, peso, bonus, armas_compat = row
     tipo = update.message.text.strip().lower()
     if tipo not in ("cura", "dano", "nenhum", "municao"):
         await update.message.reply_text("Tipo inválido. Use: cura, dano, municao ou nenhum.")
-        conn.close()
         return
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
+        # Remove pendência
+        conn = get_conn()
+        c = conn.cursor()
         c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
         conn.commit()
+        conn.close()
         await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
     except Exception as e:
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
-    finally:
-        conn.close()
-  
+
+
+async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    # Se está editando ficha
+    if uid in EDIT_PENDING:
+        await receber_edicao(update, context)
+        return
+    # Se está aguardando tipo de consumível
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        await receber_tipo_consumivel(update, context, row=row)
+        return
+    # Senão, ignora
+    
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -2313,9 +2334,7 @@ def main():
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
-    # Adicione este handler para o tipo do consumível!
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_tipo_consumivel))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
     app.run_polling()
 
 if __name__ == "__main__":
