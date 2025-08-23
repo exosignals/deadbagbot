@@ -1,8 +1,6 @@
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from urllib.parse import quote, unquote
 import psycopg2
 import psycopg2.extras
@@ -284,6 +282,17 @@ def update_inventario(uid, item):
                   (uid, item['nome'], item['peso'], item['quantidade']))
     conn.commit()
     conn.close()
+	
+def buscar_item_inventario(uid, nome_procurado):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s", (uid,))
+    rows = c.fetchall()
+    conn.close()
+    for nome, peso, quantidade in rows:
+        if normalizar(nome) == normalizar(nome_procurado):
+            return nome, peso, quantidade
+    return None, None, None
 
 def adjust_item_quantity(uid, item_nome, delta):
     conn = get_conn()
@@ -915,7 +924,7 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player['inventario']:
         lines.append("  Vazio.")
     else:
-        for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
+        for i in sorted(player['inventario'], key=lambda x: normalizar(x['nome'])):
             linha = f"  — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)"
             if i.get('municao_max'):
                 linha += f" [{i.get('municao_atual', 0)}/{i['municao_max']} balas]"
@@ -1152,25 +1161,19 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========================= DAR =========================
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Anti-spam
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
-
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /dar @jogador Nome do item xquantidade (opcional)")
         return
-
     uid_from = update.effective_user.id
     register_username(uid_from, update.effective_user.username, update.effective_user.first_name)
-
     user_tag = context.args[0]
     target_id = username_to_id(user_tag)
     if not target_id:
         await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start pelo menos uma vez.")
         return
-
-    # Parse do item e quantidade
     qtd = 1
     tail = context.args[1:]
     if len(tail) >= 2 and tail[-2].lower() == 'x' and tail[-1].isdigit():
@@ -1181,62 +1184,40 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_input = " ".join(tail[:-1])
     else:
         item_input = " ".join(tail)
-
     if qtd < 1:
         await update.message.reply_text("❌ Quantidade inválida.")
         return
-
-    # Checa item no inventário
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-        (uid_from, item_input)
-    )
-    row = c.fetchone()
-
-    if row:
-        item_nome, item_peso, qtd_doador = row
+    item_nome, item_peso, qtd_doador = buscar_item_inventario(uid_from, item_input)
+    if item_nome:
         if qtd > qtd_doador:
-            conn.close()
             await update.message.reply_text(f"❌ Quantidade indisponível. Você tem {qtd_doador}x '{item_nome}'.")
             return
     else:
         if is_admin(uid_from):
             item_info = get_catalog_item(item_input)
             if not item_info:
-                conn.close()
                 await update.message.reply_text(f"❌ Item '{item_input}' não encontrado no catálogo.")
                 return
             item_nome = item_info["nome"]
             item_peso = item_info["peso"]
         else:
-            conn.close()
             await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
             return
-    conn.close()
-
-    # Checa sobrecarga do alvo, mas não cancela, só avisa
     target_before = get_player(target_id)
     total_depois_target = peso_total(target_before) + item_peso * qtd
     aviso_sobrecarga = ""
     if total_depois_target > target_before['peso_max']:
         excesso = total_depois_target - target_before['peso_max']
         aviso_sobrecarga = f"  ⚠️ Atenção! {target_before['nome']} ficará com sobrecarga de {excesso:.1f} kg."
-
-    # Criar chave única com timestamp para evitar conflitos
     timestamp = int(time.time())
     transfer_key = f"{uid_from}_{timestamp}_{quote(item_nome)}"
-    
-    # Salva transferência pendente com expiração
     TRANSFER_PENDING[transfer_key] = {
         "item": item_nome,
         "qtd": qtd,
         "doador": uid_from,
         "alvo": target_id,
-        "expires": timestamp + 300  # 5 minutos
+        "expires": timestamp + 300
     }
-
     keyboard = [
         [
             InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_dar_{transfer_key}"),
@@ -1406,9 +1387,7 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /abandonar Nome do item xquantidade (opcional)")
         return
-
     uid = update.effective_user.id
-
     args = context.args
     if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
         qtd = int(args[-1])
@@ -1419,28 +1398,13 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         qtd = 1
         item_input = " ".join(args)
-
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-        (uid, item_input.lower())
-    )
-    row = c.fetchone()
-    if not row:
-        conn.close()
+    item_nome, item_peso, qtd_inv = buscar_item_inventario(uid, item_input)
+    if not item_nome:
         await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
         return
-
-    item_nome, item_peso, qtd_inv = row
     if qtd < 1 or qtd > qtd_inv:
-        conn.close()
         await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
         return
-
-    conn.close()
-
-    # Botões com uid do dono em ambos
     keyboard = [[
         InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}_{qtd}"),
         InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_abandonar_{uid}")
@@ -1450,7 +1414,6 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ Você está prestes a abandonar '{item_nome}' x{qtd}. Confirma?",
         reply_markup=reply_markup
     )
-
 # ========================= CALLBACK ABANDONAR =========================
 async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1619,8 +1582,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     args = context.args
-
-    # Normaliza entrada do usuário (ex.: aceita x1, aceita 1, aceita só nome)
     if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
         qtd = int(args[-1])
         item_input = " ".join(args[:-2])
@@ -1630,31 +1591,13 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         qtd = 1
         item_input = " ".join(args)
-
-    item_input_norm = normalizar(item_input)
-
-    # Busca item no inventário pelo nome normalizado
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, quantidade FROM inventario WHERE player_id=%s", (uid,))
-    rows = c.fetchall()
-    item_nome = None
-    qtd_inv = 0
-    for nome, quantidade in rows:
-        if normalizar(nome) == item_input_norm:
-            item_nome = nome
-            qtd_inv = quantidade
-            break
-    conn.close()
+    item_nome, _, qtd_inv = buscar_item_inventario(uid, item_input)
     if not item_nome:
         await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
         return
-
     cat = get_catalog_item(item_nome)
-
-    # SE FOR MUNIÇÃO, abre fluxo de escolha de arma para recarregar
     if cat and cat.get("consumivel") and cat.get("tipo") == "municao":
-        armas_compat = [a.strip().lower() for a in (cat.get("armas_compat") or "").split(",")]
+        armas_compat = [normalizar(a.strip()) for a in (cat.get("armas_compat") or "").split(",")]
         player = get_player(uid)
         armas_disponiveis = []
         for i in player["inventario"]:
@@ -1665,7 +1608,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not armas_disponiveis:
             await update.message.reply_text("❌ Você não tem nenhuma arma compatível para essa munição no inventário.")
             return
-        # Cria botões para cada arma
         keyboard = []
         for nome_arma, mun_at, mun_max in armas_disponiveis:
             cb = f"recarregar_{uid}_{quote(nome_arma)}_{quote(item_nome)}"
@@ -1676,8 +1618,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-
-    # Só permite consumir se for consumível sem bônus ou tipo
     if not cat or not cat.get("consumivel") or cat.get("bonus") or (cat.get("tipo") not in ("nenhum", None, "")):
         await update.message.reply_text(f"❌ '{item_nome}' não pode ser consumido diretamente.")
         return
@@ -1755,53 +1695,39 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
-
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /dano hp|sp [@jogador] [pericia/arma/consumivel]")
         return
-
     tipo = context.args[0].lower()
     if tipo not in ("hp", "sp", "vida", "sanidade"):
         await update.message.reply_text("Tipo inválido! Use hp/vida ou sp/sanidade.")
         return
-
-    # Parse alvo
     alvo_id = uid
     alvo_tag = mention(update.effective_user)
     bonus_pericia = 0
     bonus_arma = 0
     bonus_consumivel = 0
-    item_nome = None
-    responder_em_si = True
     pericia_usada = None
-    item_obj = None
-
-    # Parse alvo e extra
+    responder_em_si = True
     args = context.args[1:]
-    if args:
-        if args[0].startswith('@'):
-            alvo_tag = args[0]
-            t = username_to_id(alvo_tag)
-            if t:
-                alvo_id = t
-                responder_em_si = False
-            args = args[1:]
-
-    # Parse pericia ou arma/consumivel
+    if args and args[0].startswith('@'):
+        alvo_tag = args[0]
+        t = username_to_id(alvo_tag)
+        if t:
+            alvo_id = t
+            responder_em_si = False
+        args = args[1:]
     if args:
         extra = " ".join(args)
-        # Primeiro: verificar se é arma ou consumível no catálogo
-        item_obj = get_catalog_item(extra)
+        item_nome, _, qtd_inv = buscar_item_inventario(uid, extra)
+        item_obj = get_catalog_item(item_nome) if item_nome else None
         if item_obj:
-            item_nome = item_obj['nome']
-            # Se é arma
             if item_obj['arma_tipo']:
                 if item_obj['arma_tipo'] == 'melee':
                     pericia_usada = 'Luta'
                     bonus_pericia = get_player(uid)['pericias'].get('Luta', 0)
                     bonus_arma = item_obj['arma_bonus']
                 elif item_obj['arma_tipo'] == 'range':
-                    # Checa e desconta munição no inventário!
                     conn = get_conn()
                     c = conn.cursor()
                     c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_obj['nome']))
@@ -1810,31 +1736,24 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not row or row[0] is None or row[0] <= 0:
                         await update.message.reply_text(f"❌ Você está sem munição na arma '{item_obj['nome']}'!")
                         return
-                    # Desconta 1 de munição
                     update_weapon_ammo(uid, item_obj['nome'], row[0] - 1)
                     pericia_usada = 'Pontaria'
                     bonus_pericia = get_player(uid)['pericias'].get('Pontaria', 0)
                     bonus_arma = item_obj['arma_bonus']
-            # Se é consumível de dano com bônus
             elif item_obj['consumivel'] and item_obj['bonus'] and item_obj['tipo'] == "dano":
                 bonus_consumivel = item_obj['bonus']
             else:
                 await update.message.reply_text("❌ Item não pode ser usado para dano.")
                 return
         else:
-            # Não é item, tenta pegar perícia/atributo
             extra_norm = normalizar(extra)
             if extra_norm in ["forca", "luta", "pontaria"]:
                 pericia_usada = ATRIBUTOS_NORMAL.get(extra_norm) or PERICIAS_NORMAL.get(extra_norm)
                 bonus_pericia = get_player(uid)['atributos'].get(pericia_usada, 0) if extra_norm == "forca" else get_player(uid)['pericias'].get(pericia_usada, 0)
-
-    # Monta texto de quem ataca quem
     if responder_em_si:
         texto_acao = f"@{update.effective_user.username} causou dano em si."
     else:
         texto_acao = f"@{update.effective_user.username} causou dano em {alvo_tag}"
-
-    # Rolagem
     dado = random.randint(1, 6)
     total = dado + bonus_pericia + bonus_arma + bonus_consumivel
     msg = (
@@ -1848,7 +1767,6 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bonus_consumivel:
         msg += f"Bônus de consumível: +{bonus_consumivel}\n"
     msg += f"Total: {total}\n"
-
     alvo_player = get_player(alvo_id)
     if tipo in ("hp", "vida"):
         before = alvo_player['hp']
@@ -1873,11 +1791,9 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
-
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /cura [@jogador] NomeDoKitOuConsumivel")
         return
-
     args = context.args
     alvo_id = uid
     alvo_tag = mention(update.effective_user)
@@ -1892,7 +1808,11 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         await update.message.reply_text("❌ Falta nome do kit ou consumível.")
         return
-    kit_nome = " ".join(args).strip()
+    kit_input = " ".join(args).strip()
+    kit_nome, _, qtd_inv = buscar_item_inventario(uid, kit_input)
+    if not kit_nome or qtd_inv < 1:
+        await update.message.reply_text(f"❌ Você não possui '{kit_input}' no inventário.")
+        return
     kit_obj = get_catalog_item(kit_nome)
     bonus_kit = 0
     bonus_med = get_player(uid)['pericias'].get('Medicina', 0)
@@ -1914,37 +1834,26 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Item inválido para cura.")
             return
     else:
-        key = kit_nome.lower()
+        key = normalizar(kit_nome)
         bonus_kit = KIT_BONUS.get(key)
         if bonus_kit is None:
             await update.message.reply_text("❌ Kit inválido. Use: Kit Básico, Kit Intermediário ou Kit Avançado, ou item de cura.")
             return
-
-    # Consome item do inventário
+    nova = qtd_inv - 1
     conn = get_conn()
     c = conn.cursor()
-    inv_nome = kit_obj['nome'] if kit_obj else kit_nome
-    c.execute("SELECT quantidade,peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
-    row = c.fetchone()
-    if not row or row[0] <= 0:
-        await update.message.reply_text(f"❌ Você não possui '{kit_nome}' no inventário.")
-        conn.close()
-        return
-    nova = row[0] - 1
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, kit_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, inv_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, kit_nome))
     conn.commit()
     conn.close()
-
     dado = random.randint(1, 6)
     total = dado + bonus_kit + bonus_med
     alvo = get_player(alvo_id)
     before = alvo['hp']
     after = min(alvo['hp_max'], before + total)
     update_player_field(alvo_id, 'hp', after)
-
     if responder_em_si:
         texto_acao = f"@{update.effective_user.username} aplicou cura em si mesmo"
     else:
@@ -1958,7 +1867,6 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"Bônus de item: +{bonus_kit}\n"
     msg += f"Total: {total}\n"
     msg += f"{alvo['nome']}: HP {before} → {after}"
-
     await update.message.reply_text(msg)
 
 async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2049,7 +1957,6 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
-
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /ajudar @jogador NomeDoKitOuConsumivel")
         return
@@ -2058,65 +1965,51 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not alvo_id:
         await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start.")
         return
-
     alvo = get_player(alvo_id)
     if alvo['hp'] > 0:
         await update.message.reply_text("❌ O alvo não está em coma no momento.")
         return
-
-    item_nome = " ".join(context.args[1:]).strip()
-    # Tenta buscar no catálogo
+    item_input = " ".join(context.args[1:]).strip()
+    item_nome, _, qtd_inv = buscar_item_inventario(uid, item_input)
+    if not item_nome or qtd_inv < 1:
+        await update.message.reply_text(f"❌ Você não possui '{item_input}' no inventário.")
+        return
     cat = get_catalog_item(item_nome)
     bonus = 0
     tipo_item = ''
     if cat:
-        # Se for arma, não pode
         if cat['arma_tipo']:
             await update.message.reply_text("❌ Armas não podem ser usadas para ajudar em coma.")
             return
-        # Se for consumível tipo cura, pega bônus
         if cat['consumivel'] and cat['tipo'] == "cura":
             bonus = cat['bonus']
             tipo_item = "consumível"
-        # Se for consumível mas não de cura, rejeita
         elif cat['consumivel'] and cat['tipo'] != "cura":
             await update.message.reply_text("❌ Esse consumível não serve para ajuda em coma.")
             return
-        # Se não for consumível e não for kit, rejeita
         elif not cat['consumivel']:
-            key = item_nome.lower()
+            key = normalizar(item_nome)
             bonus = KIT_BONUS.get(key)
             if bonus is None:
                 await update.message.reply_text("❌ Item inválido. Use um kit médico (Básico/Intermediário/Avançado) ou um consumível de cura.")
                 return
             tipo_item = "kit"
     else:
-        # Não tá no catálogo, tenta só os kits tradicionais
-        key = item_nome.lower()
+        key = normalizar(item_nome)
         bonus = KIT_BONUS.get(key)
         if bonus is None:
             await update.message.reply_text("❌ Item inválido. Use um kit médico (Básico/Intermediário/Avançado) ou um consumível de cura.")
             return
         tipo_item = "kit"
-
-    # Consome item do inventário
+    nova = qtd_inv - 1
     conn = get_conn()
     c = conn.cursor()
-    inv_nome = cat['nome'] if cat else item_nome
-    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
-    row = c.fetchone()
-    if not row or row[0] <= 0:
-        await update.message.reply_text(f"❌ Você não possui '{item_nome}' no inventário.")
-        conn.close()
-        return
-    nova = row[0] - 1
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, inv_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, item_nome))
     conn.commit()
     conn.close()
-
     add_coma_bonus(alvo_id, bonus)
     await update.message.reply_text(
         f"🤝 {mention(update.effective_user)} usou '{item_nome}' em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}."
