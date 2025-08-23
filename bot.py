@@ -2174,7 +2174,6 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar_'))
     app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CallbackQueryHandler(callback_consumir, pattern=r'^confirm_consumir_|^cancel_consumir_'))
-    app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^recarregar_|^cancel_recarregar_'))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
