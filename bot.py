@@ -82,52 +82,58 @@ def init_db():
     conn = get_conn()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS players (
-                    id BIGINT PRIMARY KEY,
-                    nome TEXT,
-                    username TEXT,
-                    peso_max INTEGER DEFAULT 0,
-                    hp INTEGER DEFAULT 40,
-                    sp INTEGER DEFAULT 40,
-                    rerolls INTEGER DEFAULT 3
-                )''')
+        id BIGINT PRIMARY KEY,
+        nome TEXT,
+        username TEXT,
+        peso_max INTEGER DEFAULT 0,
+        hp INTEGER DEFAULT 40,
+        sp INTEGER DEFAULT 40,
+        rerolls INTEGER DEFAULT 3
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS usernames (
-                    username TEXT PRIMARY KEY,
-                    user_id BIGINT,
-                    first_name TEXT,
-                    last_seen BIGINT
-                )''')
+        username TEXT PRIMARY KEY,
+        user_id BIGINT,
+        first_name TEXT,
+        last_seen BIGINT
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS atributos (
-                    player_id BIGINT,
-                    nome TEXT,
-                    valor INTEGER DEFAULT 0,
-                    PRIMARY KEY(player_id,nome)
-                )''')
+        player_id BIGINT,
+        nome TEXT,
+        valor INTEGER DEFAULT 0,
+        PRIMARY KEY(player_id,nome)
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS pericias (
-                    player_id BIGINT,
-                    nome TEXT,
-                    valor INTEGER DEFAULT 0,
-                    PRIMARY KEY(player_id,nome)
-                )''')
+        player_id BIGINT,
+        nome TEXT,
+        valor INTEGER DEFAULT 0,
+        PRIMARY KEY(player_id,nome)
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS inventario (
-                    player_id BIGINT,
-                    nome TEXT,
-                    peso REAL,
-                    quantidade INTEGER DEFAULT 1,
-                    PRIMARY KEY(player_id,nome)
-                )''')
+        player_id BIGINT,
+        nome TEXT,
+        peso REAL,
+        quantidade INTEGER DEFAULT 1,
+        PRIMARY KEY(player_id,nome)
+    )''')
+    # ADICIONE OS CAMPOS EXTRAS NA TABELA INVENTARIO!
+    for alter in [
+        "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
+        "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
+        "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
+        "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
+        "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
+        "ADD COLUMN IF NOT EXISTS municao_atual INTEGER DEFAULT 0",
+        "ADD COLUMN IF NOT EXISTS municao_max INTEGER DEFAULT 0",
+        "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''"
+    ]:
+        try:
+            c.execute(f"ALTER TABLE inventario {alter};")
+        except Exception:
+            conn.rollback()
     c.execute('''CREATE TABLE IF NOT EXISTS catalogo (
-                    nome TEXT PRIMARY KEY,
-                    peso REAL
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
-                    user_id BIGINT PRIMARY KEY,
-                    nome TEXT,
-                    peso REAL,
-                    bonus INTEGER,
-                    armas_compat TEXT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )''')
-    # Adiciona colunas se não existirem
+        nome TEXT PRIMARY KEY,
+        peso REAL
+    )''')
     for alter in [
         "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
         "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
@@ -142,30 +148,38 @@ def init_db():
             c.execute(f"ALTER TABLE catalogo {alter};")
         except Exception:
             conn.rollback()
+    c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
+        user_id BIGINT PRIMARY KEY,
+        nome TEXT,
+        peso REAL,
+        bonus INTEGER,
+        armas_compat TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
-                    target_id BIGINT PRIMARY KEY,
-                    bonus INTEGER DEFAULT 0
-                )''')
+        target_id BIGINT PRIMARY KEY,
+        bonus INTEGER DEFAULT 0
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS turnos (
-                    player_id BIGINT,
-                    data DATE,
-                    caracteres INTEGER,
-                    mencoes TEXT,
-                    PRIMARY KEY (player_id, data)
-                )''')
+        player_id BIGINT,
+        data DATE,
+        caracteres INTEGER,
+        mencoes TEXT,
+        PRIMARY KEY (player_id, data)
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS xp_semana (
-                    player_id BIGINT,
-                    semana_inicio DATE,
-                    xp_total INTEGER DEFAULT 0,
-                    streak_atual INTEGER DEFAULT 0,
-                    PRIMARY KEY (player_id, semana_inicio)
-                )''')
+        player_id BIGINT,
+        semana_inicio DATE,
+        xp_total INTEGER DEFAULT 0,
+        streak_atual INTEGER DEFAULT 0,
+        PRIMARY KEY (player_id, semana_inicio)
+    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS interacoes_mutuas (
-                    semana_inicio DATE,
-                    jogador1 BIGINT,
-                    jogador2 BIGINT,
-                    PRIMARY KEY (semana_inicio, jogador1, jogador2)
-                )''')
+        semana_inicio DATE,
+        jogador1 BIGINT,
+        jogador2 BIGINT,
+        PRIMARY KEY (semana_inicio, jogador1, jogador2)
+    )''')
     conn.commit()
     conn.close()
 
