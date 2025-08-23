@@ -41,6 +41,7 @@ EDIT_TIMERS = {}  # Para timeouts de edição
 
 TRANSFER_PENDING = {}
 ABANDON_PENDING = {}
+LAST_RELOAD = {}
 
 KIT_BONUS = {
     "kit basico": 1,
@@ -1542,62 +1543,78 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /consumir Nome do item xquantidade (opcional)")
+        await update.message.reply_text("Uso: /consumir NomeDaMunição : NomeDaArma")
         return
     uid = update.effective_user.id
-    args = context.args
-    if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
-        qtd = int(args[-1])
-        item_input = " ".join(args[:-2])
-    elif len(args) >= 2 and args[-1].isdigit():
-        qtd = int(args[-1])
-        item_input = " ".join(args[:-1])
-    else:
-        qtd = 1
-        item_input = " ".join(args)
-    item_nome, _, qtd_inv = buscar_item_inventario(uid, item_input)
-    if not item_nome:
-        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+
+    texto = " ".join(context.args)
+    partes = re.split(r"\s*:\s*", texto)
+    if len(partes) < 2:
+        await update.message.reply_text("Use o formato: /consumir NomeDaMunição : NomeDaArma")
         return
-    cat = get_catalog_item(item_nome)
-    if cat and cat.get("consumivel") and cat.get("tipo") == "municao":
-        armas_compat = [normalizar(a.strip()) for a in (cat.get("armas_compat") or "").split(",")]
-        player = get_player(uid)
-        armas_disponiveis = []
-        for i in player["inventario"]:
-            arma_cat = get_catalog_item(i["nome"])
-            if arma_cat and arma_cat.get("arma_tipo") == "range":
-                if normalizar(arma_cat["nome"]) in armas_compat:
-                    armas_disponiveis.append((i["nome"], i.get("municao_atual",0), i.get("municao_max",0)))
-        if not armas_disponiveis:
-            await update.message.reply_text("❌ Você não tem nenhuma arma compatível para essa munição no inventário.")
-            return
-        keyboard = []
-        for nome_arma, mun_at, mun_max in armas_disponiveis:
-            cb = f"recarregar_{uid}_{quote(nome_arma)}_{quote(item_nome)}"
-            keyboard.append([InlineKeyboardButton(f"Recarregar {nome_arma} ({mun_at}/{mun_max})", callback_data=cb)])
-        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")])
-        await update.message.reply_text(
-            "Escolha a arma que deseja recarregar:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    item_municao = partes[0].strip()
+    item_arma = partes[1].strip()
+
+    # Verifica se o usuário tem a munição
+    item_nome, _, qtd_inv = buscar_item_inventario(uid, item_municao)
+    if not item_nome or qtd_inv < 1:
+        await update.message.reply_text(f"❌ Você não possui '{item_municao}' no seu inventário.")
         return
-    if not cat or not cat.get("consumivel") or cat.get("bonus") or (cat.get("tipo") not in ("nenhum", None, "")):
-        await update.message.reply_text(f"❌ '{item_nome}' não pode ser consumido diretamente.")
+
+    # Verifica se tem a arma no inventário
+    arma_nome, _, arma_qtd = buscar_item_inventario(uid, item_arma)
+    if not arma_nome or arma_qtd < 1:
+        await update.message.reply_text(f"❌ Você não possui '{item_arma}' no seu inventário.")
         return
-    if qtd < 1 or qtd > qtd_inv:
-        await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
+
+    cat_mun = get_catalog_item(item_nome)
+    cat_arma = get_catalog_item(arma_nome)
+    if not cat_mun or not cat_mun.get("consumivel") or cat_mun.get("tipo") != "municao":
+        await update.message.reply_text(f"❌ '{item_nome}' não é uma munição válida.")
         return
+    if not cat_arma or cat_arma.get("arma_tipo") != "range":
+        await update.message.reply_text(f"❌ '{arma_nome}' não é uma arma de fogo válida.")
+        return
+
+    # Verifica compatibilidade
+    armas_compat = [normalizar(a.strip()) for a in (cat_mun.get("armas_compat") or "").split(",")]
+    if normalizar(arma_nome) not in armas_compat:
+        await update.message.reply_text("❌ Essa munição não é compatível com essa arma.")
+        return
+
+    # Pega munição atual da arma
+    player = get_player(uid)
+    arma_obj = None
+    for i in player["inventario"]:
+        if normalizar(i["nome"]) == normalizar(arma_nome):
+            arma_obj = i
+            break
+    if not arma_obj:
+        await update.message.reply_text("❌ Arma não encontrada no inventário.")
+        return
+    mun_atual = arma_obj.get("municao_atual", 0)
+    mun_max = arma_obj.get("municao_max", 0)
+    if mun_atual >= mun_max:
+        await update.message.reply_text("❌ A arma já está totalmente carregada!")
+        return
+
+    # Salva info para o callback
+    global LAST_RELOAD
+    LAST_RELOAD[uid] = (item_nome, arma_nome)
+
     keyboard = [
         [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_consumir_{uid}_{quote(item_nome)}_{qtd}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_consumir_{uid}")
+            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_recarregar_{uid}"),
+            InlineKeyboardButton("❌ Cancelar",   callback_data=f"cancel_recarregar_{uid}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"Você está prestes a consumir '{item_nome}' x{qtd}. Confirma?",
-        reply_markup=reply_markup
+        f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\n"
+        f"Estado atual: <b>{mun_atual}/{mun_max} balas</b>.\n"
+        "Confirma?",
+        reply_markup=reply_markup,
+        parse_mode="HTML"
     )
 
 async def callback_consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1652,6 +1669,60 @@ async def callback_consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Só o dono pode cancelar!", show_alert=True)
             return
         await query.edit_message_text("❌ Consumo cancelado.")
+
+# Cole esta função para o callback de recarga:
+async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    uid = query.from_user.id
+
+    global LAST_RELOAD
+
+    if data == f"confirm_recarregar_{uid}":
+        municao, arma = LAST_RELOAD.get(uid, (None, None))
+        if not municao or not arma:
+            await query.edit_message_text("❌ Dados de recarga não encontrados.")
+            return
+
+        # Consome 1 munição
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
+        row = c.fetchone()
+        if not row or row[0] < 1:
+            conn.close()
+            await query.edit_message_text("❌ Munição não encontrada.")
+            return
+        nova = row[0] - 1
+        if nova <= 0:
+            c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
+        else:
+            c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, municao))
+
+        # Atualiza munição da arma
+        c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, arma))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await query.edit_message_text("❌ Arma não encontrada no inventário.")
+            return
+        mun_atual, mun_max = row
+        if mun_atual >= mun_max:
+            conn.close()
+            await query.edit_message_text("❌ A arma já está totalmente carregada!")
+            return
+        novo_mun = min(mun_max, mun_atual + 1)
+        c.execute("UPDATE inventario SET municao_atual=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (novo_mun, uid, arma))
+        conn.commit()
+        conn.close()
+        await query.edit_message_text(f"🔫 <b>{arma}</b> recarregada! [{novo_mun}/{mun_max}] balas.", parse_mode="HTML")
+        LAST_RELOAD.pop(uid, None)
+        return
+
+    elif data == f"cancel_recarregar_{uid}":
+        LAST_RELOAD.pop(uid, None)
+        await query.edit_message_text("❌ Recarga cancelada.")
+        return
 
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -2188,6 +2259,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar_'))
     app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CallbackQueryHandler(callback_consumir, pattern=r'^confirm_consumir_|^cancel_consumir_'))
+    app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^(confirm_recarregar_|cancel_recarregar_)'))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
@@ -2201,6 +2273,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
+   
     app.run_polling()
 
 if __name__ == "__main__":
