@@ -1259,15 +1259,12 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not transfer:
             await query.edit_message_text("❌ Transferência não encontrada ou expirada.")
             return
-        # SOMENTE o ALVO pode confirmar
         if transfer['alvo'] != user_id:
             await query.answer("Só quem vai receber pode confirmar!", show_alert=True)
             return
-
         if user_id not in (transfer['doador'], transfer['alvo']):
             await query.answer("Só quem está envolvido pode cancelar!", show_alert=True)
             return
-
         if time.time() > transfer['expires']:
             TRANSFER_PENDING.pop(transfer_key, None)
             await query.edit_message_text("❌ Transferência expirada.")
@@ -1311,80 +1308,54 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     peso_item = item_info["peso"]
                     municao_atual = item_info.get("muni_atual", None)
                     municao_max = item_info.get("muni_max", None)
-                    # Adiciona ao inventário do alvo com todos os campos relevantes:
-                    c.execute(
-                        "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                        (alvo, item)
-                    )
-                    row_tgt = c.fetchone()
-                    if row_tgt:
-                        nova_qtd_tgt = row_tgt[0] + qtd
-                        c.execute(
-                            "UPDATE inventario SET quantidade=%s, peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                            (
-                                nova_qtd_tgt, item_info["peso"],
-                                item_info.get("consumivel", False),
-                                item_info.get("bonus", 0),
-                                item_info.get("tipo", ""),
-                                item_info.get("arma_tipo", ""),
-                                item_info.get("arma_bonus", 0),
-                                item_info.get("muni_atual", 0),
-                                item_info.get("muni_max", 0),
-                                item_info.get("armas_compat", ""),
-                                alvo, item
-                            )
-                        )
-                    else:
-                        c.execute(
-                            "INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                            (
-                                alvo, item_info["nome"], item_info["peso"], qtd,
-                                item_info.get("consumivel", False),
-                                item_info.get("bonus", 0),
-                                item_info.get("tipo", ""),
-                                item_info.get("arma_tipo", ""),
-                                item_info.get("arma_bonus", 0),
-                                item_info.get("muni_atual", 0),
-                                item_info.get("muni_max", 0),
-                                item_info.get("armas_compat", "")
-                            )
-                        )
-            # Decide se é arma de fogo
-            item_info = get_catalog_item(item)
-            if item_info and item_info["arma_tipo"] == "range":
-                c.execute(
-                    "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (alvo, item)
-                )
-                row_tgt = c.fetchone()
-                if row_tgt:
-                    nova_qtd_tgt = row_tgt[0] + qtd
-                    c.execute(
-                        "UPDATE inventario SET quantidade=%s, peso=%s, municao_atual=%s, municao_max=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                        (nova_qtd_tgt, peso_item, municao_atual, municao_max, alvo, item)
-                    )
                 else:
-                    c.execute(
-                        "INSERT INTO inventario(player_id, nome, peso, quantidade, municao_atual, municao_max) VALUES(%s,%s,%s,%s,%s,%s)",
-                        (alvo, item, peso_item, qtd, municao_atual, municao_max)
+                    # Doador não tem o item e não é admin
+                    conn.close()
+                    await query.edit_message_text("❌ Doador não possui o item.")
+                    TRANSFER_PENDING.pop(transfer_key, None)
+                    return
+
+            # --- INÍCIO DO PATCH ABSOLUTO ---
+            # Adiciona ao inventário do alvo, sem duplicar
+            c.execute(
+                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                (alvo, item)
+            )
+            row_tgt = c.fetchone()
+            item_info = get_catalog_item(item)
+            if row_tgt:
+                nova_qtd_tgt = row_tgt[0] + qtd
+                c.execute(
+                    "UPDATE inventario SET quantidade=%s, peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, municao_atual=%s, municao_max=%s, armas_compat=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (
+                        nova_qtd_tgt, item_info["peso"],
+                        item_info.get("consumivel", False),
+                        item_info.get("bonus", 0),
+                        item_info.get("tipo", ""),
+                        item_info.get("arma_tipo", ""),
+                        item_info.get("arma_bonus", 0),
+                        item_info.get("muni_atual", 0),
+                        item_info.get("muni_max", 0),
+                        item_info.get("armas_compat", ""),
+                        alvo, item
                     )
+                )
             else:
                 c.execute(
-                    "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (alvo, item)
+                    "INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        alvo, item_info["nome"], item_info["peso"], qtd,
+                        item_info.get("consumivel", False),
+                        item_info.get("bonus", 0),
+                        item_info.get("tipo", ""),
+                        item_info.get("arma_tipo", ""),
+                        item_info.get("arma_bonus", 0),
+                        item_info.get("muni_atual", 0),
+                        item_info.get("muni_max", 0),
+                        item_info.get("armas_compat", "")
+                    )
                 )
-                row_tgt = c.fetchone()
-                if row_tgt:
-                    nova_qtd_tgt = row_tgt[0] + qtd
-                    c.execute(
-                        "UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                        (nova_qtd_tgt, peso_item, alvo, item)
-                    )
-                else:
-                    c.execute(
-                        "INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)",
-                        (alvo, item, peso_item, qtd)
-                    )
+            # --- FIM DO PATCH ABSOLUTO ---
 
             conn.commit()
         except Exception as e:
@@ -1414,16 +1385,14 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{aviso_sobrecarga}"
         )
 
-    # ================= CANCELAMENTO =================
     elif data.startswith("cancel_dar_"):
         transfer_key = data.replace("cancel_dar_", "")
         transfer = TRANSFER_PENDING.get(transfer_key)
         if not transfer:
             await query.edit_message_text("❌ Transferência não encontrada.")
             return
-        # Só o doador OU o alvo podem cancelar
         if user_id not in (transfer['doador'], transfer['alvo']):
-            return  # Ignora o clique, não cancela nem muda nada!
+            return
         TRANSFER_PENDING.pop(transfer_key, None)
         await query.edit_message_text("❌ Transferência cancelada.")
 
@@ -1459,6 +1428,7 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ Você está prestes a abandonar '{item_nome}' x{qtd}. Confirma?",
         reply_markup=reply_markup
     )
+	
 # ========================= CALLBACK ABANDONAR =========================
 async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
