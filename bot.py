@@ -19,7 +19,7 @@ def normalizar(texto):
     texto = texto.lower()
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
                     if unicodedata.category(c) != 'Mn')
-    return texto
+    return texto.strip()
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -1619,6 +1619,8 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     args = context.args
+
+    # Normaliza entrada do usuário (ex.: aceita x1, aceita 1, aceita só nome)
     if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
         qtd = int(args[-1])
         item_input = " ".join(args[:-2])
@@ -1628,18 +1630,26 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         qtd = 1
         item_input = " ".join(args)
+
+    item_input_norm = normalizar(item_input)
+
+    # Busca item no inventário pelo nome normalizado
     conn = get_conn()
     c = conn.cursor()
-    c.execute(
-        "SELECT nome, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-        (uid, item_input.lower())
-    )
-    row = c.fetchone()
+    c.execute("SELECT nome, quantidade FROM inventario WHERE player_id=%s", (uid,))
+    rows = c.fetchall()
+    item_nome = None
+    qtd_inv = 0
+    for nome, quantidade in rows:
+        if normalizar(nome) == item_input_norm:
+            item_nome = nome
+            qtd_inv = quantidade
+            break
     conn.close()
-    if not row:
+    if not item_nome:
         await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
         return
-    item_nome, qtd_inv = row
+
     cat = get_catalog_item(item_nome)
 
     # SE FOR MUNIÇÃO, abre fluxo de escolha de arma para recarregar
@@ -1650,7 +1660,7 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in player["inventario"]:
             arma_cat = get_catalog_item(i["nome"])
             if arma_cat and arma_cat.get("arma_tipo") == "range":
-                if arma_cat["nome"].lower() in armas_compat:
+                if normalizar(arma_cat["nome"]) in armas_compat:
                     armas_disponiveis.append((i["nome"], i.get("municao_atual",0), i.get("municao_max",0)))
         if not armas_disponiveis:
             await update.message.reply_text("❌ Você não tem nenhuma arma compatível para essa munição no inventário.")
