@@ -1263,11 +1263,11 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if transfer['alvo'] != user_id:
             await query.answer("Só quem vai receber pode confirmar!", show_alert=True)
             return
-            
+
         if user_id not in (transfer['doador'], transfer['alvo']):
             await query.answer("Só quem está envolvido pode cancelar!", show_alert=True)
             return
-        
+
         if time.time() > transfer['expires']:
             TRANSFER_PENDING.pop(transfer_key, None)
             await query.edit_message_text("❌ Transferência expirada.")
@@ -1311,7 +1311,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     peso_item = item_info["peso"]
                     municao_atual = item_info.get("muni_atual", None)
                     municao_max = item_info.get("muni_max", None)
-                    # PATCH: Adicione todos campos extras do catálogo!
                     # Adiciona ao inventário do alvo com todos os campos relevantes:
                     c.execute(
                         "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
@@ -1323,8 +1322,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         c.execute(
                             "UPDATE inventario SET quantidade=%s, peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                             (
-                                nova_qtd_tgt, 
-                                item_info["peso"],
+                                nova_qtd_tgt, item_info["peso"],
                                 item_info.get("consumivel", False),
                                 item_info.get("bonus", 0),
                                 item_info.get("tipo", ""),
@@ -1340,7 +1338,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         c.execute(
                             "INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                             (
-                                alvo, item_info["nome"], item_info["peso"], qtd, 
+                                alvo, item_info["nome"], item_info["peso"], qtd,
                                 item_info.get("consumivel", False),
                                 item_info.get("bonus", 0),
                                 item_info.get("tipo", ""),
@@ -1354,7 +1352,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Decide se é arma de fogo
             item_info = get_catalog_item(item)
             if item_info and item_info["arma_tipo"] == "range":
-                # Transferir arma de fogo com munição
                 c.execute(
                     "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                     (alvo, item)
@@ -1372,7 +1369,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         (alvo, item, peso_item, qtd, municao_atual, municao_max)
                     )
             else:
-                # Normal
                 c.execute(
                     "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                     (alvo, item)
