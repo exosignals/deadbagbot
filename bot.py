@@ -1543,17 +1543,20 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /consumir NomeDaMunição : NomeDaArma")
+        await update.message.reply_text("Uso: /consumir NomeDaMunição : NomeDaArma xQuantidade")
         return
     uid = update.effective_user.id
 
     texto = " ".join(context.args)
-    partes = re.split(r"\s*:\s*", texto)
-    if len(partes) < 2:
-        await update.message.reply_text("Use o formato: /consumir NomeDaMunição : NomeDaArma")
+    # Regex para separar: NomeMunição : NomeArma xQtd
+    m = re.match(r"(.+?)\s*:\s*(.+?)(?:\s+x(\d+))?$", texto)
+    if not m:
+        await update.message.reply_text("Use: /consumir NomeDaMunição : NomeDaArma xQuantidade")
         return
-    item_municao = partes[0].strip()
-    item_arma = partes[1].strip()
+    item_municao = m.group(1).strip()
+    item_arma = m.group(2).strip()
+    qtd_str = m.group(3)
+    qtd = int(qtd_str) if qtd_str else 1
 
     # Verifica se o usuário tem a munição
     item_nome, _, qtd_inv = buscar_item_inventario(uid, item_municao)
@@ -1576,7 +1579,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ '{arma_nome}' não é uma arma de fogo válida.")
         return
 
-    # Verifica compatibilidade
     armas_compat = [normalizar(a.strip()) for a in (cat_mun.get("armas_compat") or "").split(",")]
     if normalizar(arma_nome) not in armas_compat:
         await update.message.reply_text("❌ Essa munição não é compatível com essa arma.")
@@ -1598,19 +1600,25 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ A arma já está totalmente carregada!")
         return
 
-    # Salva info para o callback
+    # Calcula máximo possível de recarga
+    recarregar_max = min(qtd, qtd_inv, mun_max - mun_atual)
+    if recarregar_max < 1:
+        await update.message.reply_text("❌ Não é possível recarregar essa quantidade (verifique munição e espaço).")
+        return
+
     global LAST_RELOAD
-    LAST_RELOAD[uid] = (item_nome, arma_nome)
+    LAST_RELOAD[uid] = (item_nome, arma_nome, recarregar_max)
 
     keyboard = [
         [
             InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_recarregar_{uid}"),
-            InlineKeyboardButton("❌ Cancelar",   callback_data=f"cancel_recarregar_{uid}")
+            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\n"
+        f"Quantidade: <b>{recarregar_max}</b>\n"
         f"Estado atual: <b>{mun_atual}/{mun_max} balas</b>.\n"
         "Confirma?",
         reply_markup=reply_markup,
@@ -1670,7 +1678,6 @@ async def callback_consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await query.edit_message_text("❌ Consumo cancelado.")
 
-# Cole esta função para o callback de recarga:
 async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -1679,21 +1686,22 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
     global LAST_RELOAD
 
     if data == f"confirm_recarregar_{uid}":
-        municao, arma = LAST_RELOAD.get(uid, (None, None))
-        if not municao or not arma:
+        reload_data = LAST_RELOAD.get(uid)
+        if not reload_data or len(reload_data) != 3:
             await query.edit_message_text("❌ Dados de recarga não encontrados.")
             return
+        municao, arma, qtd = reload_data
 
-        # Consome 1 munição
+        # Consome qtd munição
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
         row = c.fetchone()
-        if not row or row[0] < 1:
+        if not row or row[0] < qtd:
             conn.close()
-            await query.edit_message_text("❌ Munição não encontrada.")
+            await query.edit_message_text("❌ Munição insuficiente.")
             return
-        nova = row[0] - 1
+        nova = row[0] - qtd
         if nova <= 0:
             c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
         else:
@@ -1707,15 +1715,11 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.edit_message_text("❌ Arma não encontrada no inventário.")
             return
         mun_atual, mun_max = row
-        if mun_atual >= mun_max:
-            conn.close()
-            await query.edit_message_text("❌ A arma já está totalmente carregada!")
-            return
-        novo_mun = min(mun_max, mun_atual + 1)
+        novo_mun = min(mun_max, mun_atual + qtd)
         c.execute("UPDATE inventario SET municao_atual=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (novo_mun, uid, arma))
         conn.commit()
         conn.close()
-        await query.edit_message_text(f"🔫 <b>{arma}</b> recarregada! [{novo_mun}/{mun_max}] balas.", parse_mode="HTML")
+        await query.edit_message_text(f"🔫 <b>{arma}</b> recarregada! [{mun_atual} → {novo_mun}/{mun_max}] balas.", parse_mode="HTML")
         LAST_RELOAD.pop(uid, None)
         return
 
