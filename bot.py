@@ -1284,8 +1284,13 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (doador, item)
             )
             row = c.fetchone()
+
+            # Valores padrão
+            municao_atual, municao_max = 0, 0
+            peso_item = 0
+
             if row:
-                qtd_doador, peso_item, municao_atual, municao_max = row[0], row[1], row[2], row[3]
+                qtd_doador, peso_item, municao_atual, municao_max = row
                 nova_qtd_doador = qtd_doador - qtd
                 if nova_qtd_doador <= 0:
                     c.execute(
@@ -1298,6 +1303,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         (nova_qtd_doador, doador, item)
                     )
             else:
+                # Só admin pode dar item que não tem
                 if is_admin(doador):
                     item_info = get_catalog_item(item)
                     if not item_info:
@@ -1306,10 +1312,9 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         TRANSFER_PENDING.pop(transfer_key, None)
                         return
                     peso_item = item_info["peso"]
-                    municao_atual = item_info.get("muni_atual", None)
-                    municao_max = item_info.get("muni_max", None)
+                    municao_atual = item_info.get("muni_atual", 0)
+                    municao_max = item_info.get("muni_max", 0)
                 else:
-                    # Doador não tem o item e não é admin
                     conn.close()
                     await query.edit_message_text("❌ Doador não possui o item.")
                     TRANSFER_PENDING.pop(transfer_key, None)
@@ -1323,6 +1328,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             row_tgt = c.fetchone()
             item_info = get_catalog_item(item)
+
             if row_tgt:
                 nova_qtd_tgt = row_tgt[0] + qtd
                 c.execute(
@@ -1334,8 +1340,8 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         item_info.get("tipo", ""),
                         item_info.get("arma_tipo", ""),
                         item_info.get("arma_bonus", 0),
-                        item_info.get("muni_atual", 0),
-                        item_info.get("muni_max", 0),
+                        municao_atual,   # 👈 preserva munição real do doador
+                        municao_max,     # 👈 idem
                         item_info.get("armas_compat", ""),
                         alvo, item
                     )
@@ -1350,8 +1356,8 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         item_info.get("tipo", ""),
                         item_info.get("arma_tipo", ""),
                         item_info.get("arma_bonus", 0),
-                        item_info.get("muni_atual", 0),
-                        item_info.get("muni_max", 0),
+                        municao_atual,   # 👈 preserva munição real do doador
+                        municao_max,     # 👈 idem
                         item_info.get("armas_compat", "")
                     )
                 )
