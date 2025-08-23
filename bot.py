@@ -1296,12 +1296,46 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     peso_item = item_info["peso"]
                     municao_atual = item_info.get("muni_atual", None)
                     municao_max = item_info.get("muni_max", None)
-                else:
-                    conn.close()
-                    await query.edit_message_text("❌ O doador não tem mais o item.")
-                    TRANSFER_PENDING.pop(transfer_key, None)
-                    return
-
+                    # PATCH: Adicione todos campos extras do catálogo!
+                    # Adiciona ao inventário do alvo com todos os campos relevantes:
+                    c.execute(
+                        "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                        (alvo, item)
+                    )
+                    row_tgt = c.fetchone()
+                    if row_tgt:
+                        nova_qtd_tgt = row_tgt[0] + qtd
+                        c.execute(
+                            "UPDATE inventario SET quantidade=%s, peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                            (
+                                nova_qtd_tgt, 
+                                item_info["peso"],
+                                item_info.get("consumivel", False),
+                                item_info.get("bonus", 0),
+                                item_info.get("tipo", ""),
+                                item_info.get("arma_tipo", ""),
+                                item_info.get("arma_bonus", 0),
+                                item_info.get("muni_atual", 0),
+                                item_info.get("muni_max", 0),
+                                item_info.get("armas_compat", ""),
+                                alvo, item
+                            )
+                        )
+                    else:
+                        c.execute(
+                            "INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (
+                                alvo, item_info["nome"], item_info["peso"], qtd, 
+                                item_info.get("consumivel", False),
+                                item_info.get("bonus", 0),
+                                item_info.get("tipo", ""),
+                                item_info.get("arma_tipo", ""),
+                                item_info.get("arma_bonus", 0),
+                                item_info.get("muni_atual", 0),
+                                item_info.get("muni_max", 0),
+                                item_info.get("armas_compat", "")
+                            )
+                        )
             # Decide se é arma de fogo
             item_info = get_catalog_item(item)
             if item_info and item_info["arma_tipo"] == "range":
@@ -1491,90 +1525,6 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     else:
         await query.answer("Callback inválido.", show_alert=True)
-
-async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("Uso: /recarregar NomeDaArma")
-        return
-
-    uid = update.effective_user.id
-    arma_nome = " ".join(context.args).strip()
-    arma_obj = get_catalog_item(arma_nome)
-    if not arma_obj or arma_obj['arma_tipo'] != 'range':
-        await update.message.reply_text("❌ Arma não encontrada ou não é do tipo range.")
-        return
-    # Verifica munição compatível no inventário
-    municoes_disponiveis = []
-    for row in list_catalog():
-        nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat = row
-        if tipo == 'municao' and consumivel and armas_compat:
-            armas = [x.strip().lower() for x in armas_compat.split(',')]
-            if arma_obj['nome'].lower() in armas:
-                # Verifica se tem no inventário
-                inv = get_player(uid)['inventario']
-                for i in inv:
-                    if i['nome'].lower() == nome.lower() and i['quantidade'] > 0:
-                        municoes_disponiveis.append((nome, i['quantidade']))
-    if not municoes_disponiveis:
-        await update.message.reply_text("❌ Você não possui munição compatível para essa arma.")
-        return
-    nome_mun, qtd_mun = municoes_disponiveis[0]
-    keyboard = [[
-        InlineKeyboardButton(f"✅ Recarregar com {nome_mun} x1", callback_data=f"confirm_recarregar_{uid}_{quote(arma_obj['nome'])}_{quote(nome_mun)}"),
-        InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")
-    ]]
-    await update.message.reply_text(
-        f"Você tem {nome_mun} x{qtd_mun} para {arma_obj['nome']} em seu inventário, deseja utilizar?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    if data.startswith("recarregar_"):
-        _, uid_str, arma_nome, mun_nome = data.split("_", 3)
-        uid = int(uid_str)
-        arma_nome = unquote(arma_nome)
-        mun_nome = unquote(mun_nome)
-        if query.from_user.id != uid:
-            await query.answer("Só o dono pode confirmar!", show_alert=True)
-            return
-        conn = get_conn()
-        c = conn.cursor()
-        # Checa munição no inventário
-        c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, mun_nome))
-        row = c.fetchone()
-        if not row or row[0] < 1:
-            conn.close()
-            await query.edit_message_text("❌ Munição não encontrada.")
-            return
-        # Consome munição
-        nova = row[0] - 1
-        if nova <= 0:
-            c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, mun_nome))
-        else:
-            c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, mun_nome))
-        # Atualiza munição da arma NO INVENTÁRIO (não no catálogo)
-        c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, arma_nome))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            await query.edit_message_text("❌ Arma não encontrada no inventário.")
-            return
-        mun_atual, mun_max = row
-        if mun_atual >= mun_max:
-            conn.close()
-            await query.edit_message_text("❌ A arma já está totalmente carregada!")
-            return
-        novo_mun = min(mun_max, mun_atual + 1)
-        c.execute("UPDATE inventario SET municao_atual=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (novo_mun, uid, arma_nome))
-        conn.commit()
-        conn.close()
-        await query.edit_message_text(f"🔫 '{arma_nome}' recarregada! [{novo_mun}/{mun_max}] balas.")
-        return
-    elif data.startswith("cancel_recarregar_"):
-        await query.edit_message_text("❌ Recarga cancelada.")
-        return
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
