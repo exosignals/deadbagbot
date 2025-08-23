@@ -228,10 +228,14 @@ def get_player(uid):
     c.execute("SELECT nome, valor FROM pericias WHERE player_id=%s", (uid,))
     for a, v in c.fetchall():
         player["pericias"][a] = v
-    # Inventário
-    c.execute("SELECT nome,peso,quantidade FROM inventario WHERE player_id=%s", (uid,))
-    for n, p, q in c.fetchall():
-        player["inventario"].append({"nome": n, "peso": p, "quantidade": q})
+    # Inventário (agora com munição!)
+    c.execute("SELECT nome,peso,quantidade,municao_atual,municao_max FROM inventario WHERE player_id=%s", (uid,))
+    for n, p, q, mun_at, mun_max in c.fetchall():
+        entry = {"nome": n, "peso": p, "quantidade": q}
+        if mun_max is not None:
+            entry["municao_atual"] = mun_at
+            entry["municao_max"] = mun_max
+        player["inventario"].append(entry)
     conn.close()
     return player
 
@@ -781,7 +785,6 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in EDIT_PENDING:
-        register_username(uid, update.effective_user.username, update.effective_user.first_name)
         return
 
     player = get_player(uid)
@@ -1041,11 +1044,10 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
     uid = update.effective_user.id
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+    c.execute("SELECT 1 FROM pending_consumivel WHERE user_id=%s", (uid,))
     row = c.fetchone()
+    conn.close()
     if not row:
-        await update.message.reply_text("❌ Não achei a pendência de criação! Por favor, execute o /addconsumivel de novo.")
-        conn.close()
         return
     nome, peso, bonus, armas_compat = row
     tipo = update.message.text.strip().lower()
@@ -1545,18 +1547,17 @@ async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
-    if data.startswith("confirm_recarregar_"):
+    if data.startswith("recarregar_"):
         _, uid_str, arma_nome, mun_nome = data.split("_", 3)
         uid = int(uid_str)
         arma_nome = unquote(arma_nome)
         mun_nome = unquote(mun_nome)
-        # Só o dono pode confirmar
         if query.from_user.id != uid:
             await query.answer("Só o dono pode confirmar!", show_alert=True)
             return
-        # Checa inventário
         conn = get_conn()
         c = conn.cursor()
+        # Checa munição no inventário
         c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, mun_nome))
         row = c.fetchone()
         if not row or row[0] < 1:
@@ -1569,17 +1570,27 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
             c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, mun_nome))
         else:
             c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, mun_nome))
-        # Atualiza munição da arma no catálogo
-        arma_obj = get_catalog_item(arma_nome)
-        muni_max = arma_obj['muni_max']
-        c.execute("UPDATE catalogo SET muni_atual=%s WHERE LOWER(nome)=LOWER(%s)", (muni_max, arma_nome))
+        # Atualiza munição da arma NO INVENTÁRIO (não no catálogo)
+        c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, arma_nome))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await query.edit_message_text("❌ Arma não encontrada no inventário.")
+            return
+        mun_atual, mun_max = row
+        if mun_atual >= mun_max:
+            conn.close()
+            await query.edit_message_text("❌ A arma já está totalmente carregada!")
+            return
+        novo_mun = min(mun_max, mun_atual + 1)
+        c.execute("UPDATE inventario SET municao_atual=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (novo_mun, uid, arma_nome))
         conn.commit()
         conn.close()
-        await query.edit_message_text(f"Munição '{mun_nome}' consumida, '{arma_nome}' recarregada! {arma_obj['muni_atual']}/{muni_max} → {muni_max}/{muni_max}")
+        await query.edit_message_text(f"🔫 '{arma_nome}' recarregada! [{novo_mun}/{mun_max}] balas.")
+        return
     elif data.startswith("cancel_recarregar_"):
         await query.edit_message_text("❌ Recarga cancelada.")
-    else:
-        await query.answer("Callback inválido.", show_alert=True)
+        return
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
@@ -1609,6 +1620,32 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     item_nome, qtd_inv = row
     cat = get_catalog_item(item_nome)
+
+    # SE FOR MUNIÇÃO, abre fluxo de escolha de arma para recarregar
+    if cat and cat.get("consumivel") and cat.get("tipo") == "municao":
+        armas_compat = [a.strip().lower() for a in (cat.get("armas_compat") or "").split(",")]
+        player = get_player(uid)
+        armas_disponiveis = []
+        for i in player["inventario"]:
+            arma_cat = get_catalog_item(i["nome"])
+            if arma_cat and arma_cat.get("arma_tipo") == "range":
+                if arma_cat["nome"].lower() in armas_compat:
+                    armas_disponiveis.append((i["nome"], i.get("municao_atual",0), i.get("municao_max",0)))
+        if not armas_disponiveis:
+            await update.message.reply_text("❌ Você não tem nenhuma arma compatível para essa munição no inventário.")
+            return
+        # Cria botões para cada arma
+        keyboard = []
+        for nome_arma, mun_at, mun_max in armas_disponiveis:
+            cb = f"recarregar_{uid}_{quote(nome_arma)}_{quote(item_nome)}"
+            keyboard.append([InlineKeyboardButton(f"Recarregar {nome_arma} ({mun_at}/{mun_max})", callback_data=cb)])
+        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")])
+        await update.message.reply_text(
+            "Escolha a arma que deseja recarregar:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     # Só permite consumir se for consumível sem bônus ou tipo
     if not cat or not cat.get("consumivel") or cat.get("bonus") or (cat.get("tipo") not in ("nenhum", None, "")):
         await update.message.reply_text(f"❌ '{item_nome}' não pode ser consumido diretamente.")
@@ -2263,8 +2300,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar_'))
     app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CallbackQueryHandler(callback_consumir, pattern=r'^confirm_consumir_|^cancel_consumir_'))
-    app.add_handler(CommandHandler("recarregar", recarregar))
-    app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^confirm_recarregar_|^cancel_recarregar_'))
+    app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^recarregar_|^cancel_recarregar_'))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
@@ -2278,6 +2314,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
     # Adicione este handler para o tipo do consumível!
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_tipo_consumivel))
     app.run_polling()
 
