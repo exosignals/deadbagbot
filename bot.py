@@ -556,10 +556,16 @@ def xp_por_caracteres(n):
         return 15
     elif n < 2000:
         return 20
+    elif n <= 2500:
+        return 25
+    elif n <= 3000:
+        return 30
+    elif n <= 3500:
+        return 35
     elif n <= 4096:
-        return 25
+        return 40
     else:
-        return 25
+        return 40
 
 async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type == 'private':
