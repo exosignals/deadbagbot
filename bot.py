@@ -2086,7 +2086,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo [+ item1 + item2 ...] OU /roll d20+2")
         return False
 
-        raw = " ".join(context.args)
+    raw = " ".join(context.args)
     partes = [p.strip() for p in raw.split("+")]
     key = partes[0]
     key_norm = normalizar(key)
