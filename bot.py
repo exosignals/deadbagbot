@@ -30,9 +30,28 @@ COOLDOWN = 1
 
 MAX_ATRIBUTOS = 20
 MAX_PERICIAS = 40
-ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
-PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
-                  "Pontaria","Luta","Sobrevivência","Cultura","Intuição","Tecnologia"]
+ATRIBUTOS_LISTA = [
+    "Força",
+    "Agilidade",
+    "Vitalidade",
+    "Intelecto",
+    "Vigilância",
+    "Carisma"
+]
+PERICIAS_LISTA = [
+    "Luta",
+    "Resistência",
+    "Furtividade",
+    "Pontaria",
+    "Estabilidade",
+    "Sobrevivência",
+    "Medicina",
+    "Improviso",
+    "Exploração",
+    "Intuição",
+    "Manipulação",
+    "Confiança"
+]
 ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
@@ -116,7 +135,6 @@ def init_db():
         quantidade INTEGER DEFAULT 1,
         PRIMARY KEY(player_id,nome)
     )''')
-    # ADICIONE OS CAMPOS EXTRAS NA TABELA INVENTARIO!
     for alter in [
         "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
         "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
@@ -160,6 +178,10 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
         target_id BIGINT PRIMARY KEY,
         bonus INTEGER DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS coma_teste (
+        player_id BIGINT PRIMARY KEY,
+        ultima_data DATE
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS turnos (
         player_id BIGINT,
@@ -496,6 +518,51 @@ def pop_coma_bonus(target_id: int) -> int:
     conn.close()
     return bonus
 
+def registrar_teste_coma(uid: int) -> bool:
+    hoje = datetime.now().date()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT ultima_data FROM coma_teste WHERE player_id=%s", (uid,))
+    row = c.fetchone()
+    if row and row[0] == hoje:
+        conn.close()
+        return False
+    c.execute("INSERT INTO coma_teste(player_id, ultima_data) VALUES(%s,%s) ON CONFLICT (player_id) DO UPDATE SET ultima_data=%s", (uid, hoje, hoje))
+    conn.commit()
+    conn.close()
+    return True
+
+def reset_coma_teste():
+    while True:
+        now = datetime.now()
+        next_reset = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if now >= next_reset:
+            next_reset += timedelta(days=1)
+        wait_seconds = (next_reset - now).total_seconds()
+        time.sleep(wait_seconds)
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM coma_teste")
+        conn.commit()
+        conn.close()
+        logger.info("🧊 Resetei testes de coma!")
+
+def parse_nome_quantidade(args):
+    # Aceita "item x2", "item 2", "item"
+    if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
+        qtd = int(args[-1])
+        nome = " ".join(args[:-2])
+    elif len(args) >= 1 and (args[-1].startswith('x') and args[-1][1:].isdigit()):
+        qtd = int(args[-1][1:])
+        nome = " ".join(args[:-1])
+    elif len(args) >= 1 and args[-1].isdigit():
+        qtd = int(args[-1])
+        nome = " ".join(args[:-1])
+    else:
+        qtd = 1
+        nome = " ".join(args)
+    return nome.strip(), qtd
+
 def reset_diario_rerolls():
     while True:
         try:
@@ -770,7 +837,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n\n"
     penal = penalidade_sobrecarga(player)
     if penal:
-        text += f"⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!\n"
+        text += f"⚠︎ Penalidade ativa: {penal} em Força, Agilidade e Furtividade!\n"
     text += "<blockquote>Para editar Atributos e Perícias, utilize o comando /editarficha.</blockquote>\n<blockquote>Para gerenciar seu Inventário, utilize o comando /inventario.</blockquote>\n\u200B"
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -802,9 +869,9 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = (
         "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n\n"
-        " ⤷ <b>EXEMPLO</b>\n\n<blockquote>Força: 3\nPersuasão: 2\nMedicina: 1</blockquote>\n\n"
+        " ⤷ <b>EXEMPLO</b>\n\n<blockquote>Força: 3\nImproviso: 2\nMedicina: 1</blockquote>\n\n"
         "TODOS os Atributos e Perícias, é só copiar, colar, preencher e enviar!\n"
-        "\n<pre>Força: \nDestreza: \nConstituição: \nInteligência: \nSabedoria: \nCarisma: \nPercepção: \nPersuasão: \nMedicina: \nFurtividade: \nIntimidação: \nInvestigação: \nPontaria: \nLuta: \nSobrevivência: \nCultura: \nIntuição: \nTecnologia: </pre>\n\n"
+        "\n<pre>Força: \nAgilidade: \nVitalidade: \nIntelecto: \nVigilância: \nCarisma: \nLuta: \nResistência: \nFurtividade: \nPontaria: \nEstabilidade: \nSobrevivência: \nMedicina: \nImproviso: \nExploração: \nIntuição: \nManipulação: \nConfiança: </pre>\n\n"
         " ⓘ <b>ATENÇÃO</b>\n\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
@@ -957,12 +1024,12 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f" ⚠︎ {excesso:.1f} kg de <b>SOBRECARGA</b>!")
     penal = penalidade_sobrecarga(player)
     if penal:
-        lines.append(f"  ⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!\n")
+        lines.append(f"  ⚠︎ Penalidade ativa: {penal} em Força, Agilidade e Furtividade!\n")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     try:
         data = list_catalog()
@@ -995,7 +1062,7 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
@@ -1018,7 +1085,7 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
@@ -1118,7 +1185,7 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
@@ -1188,23 +1255,17 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /dar @jogador Nome do item xquantidade (opcional)")
         return
+
     uid_from = update.effective_user.id
     register_username(uid_from, update.effective_user.username, update.effective_user.first_name)
     user_tag = context.args[0]
     target_id = username_to_id(user_tag)
+    nome, qtd = parse_nome_quantidade(context.args[1:])
+    item_input = nome  # usar só o resultado do parse_nome_quantidade
+
     if not target_id:
         await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start pelo menos uma vez.")
         return
-    qtd = 1
-    tail = context.args[1:]
-    if len(tail) >= 2 and tail[-2].lower() == 'x' and tail[-1].isdigit():
-        qtd = int(tail[-1])
-        item_input = " ".join(tail[:-2])
-    elif len(tail) >= 1 and tail[-1].isdigit():
-        qtd = int(tail[-1])
-        item_input = " ".join(tail[:-1])
-    else:
-        item_input = " ".join(tail)
     if qtd < 1:
         await update.message.reply_text("❌ Quantidade inválida.")
         return
@@ -1410,23 +1471,18 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========================= COMANDO ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /abandonar Nome do item xquantidade (opcional)")
         return
     uid = update.effective_user.id
-    args = context.args
-    if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
-        qtd = int(args[-1])
-        item_input = " ".join(args[:-2])
-    elif len(args) >= 2 and args[-1].isdigit():
-        qtd = int(args[-1])
-        item_input = " ".join(args[:-1])
-    else:
-        qtd = 1
-        item_input = " ".join(args)
-    item_nome, item_peso, qtd_inv = buscar_item_inventario(uid, item_input)
+    nome, qtd = parse_nome_quantidade(context.args)
+    item_nome, item_peso, qtd_inv = buscar_item_inventario(uid, nome)
+
     if not item_nome:
-        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+        await update.message.reply_text(f"❌ Você não possui '{nome}' no seu inventário.")
         return
     if qtd < 1 or qtd > qtd_inv:
         await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
@@ -1519,21 +1575,22 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await query.answer("Callback inválido.", show_alert=True)
 
-async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /consumir NomeDaMunição : NomeDaArma xQuantidade")
+        await update.message.reply_text("Uso: /recarregar NomeDaMunição : NomeDaArma xQuantidade")
         return
     uid = update.effective_user.id
-
     texto = " ".join(context.args)
-    # Regex para separar: NomeMunição : NomeArma xQtd
-    m = re.match(r"(.+?)\s*:\s*(.+?)(?:\s+x(\d+))?$", texto)
+    m = re.match(r"(.+?)\s*:\s*(.+?)(?:\s+x(\d+)|\s+(\d+))?$", texto)
     if not m:
-        await update.message.reply_text("Use: /consumir NomeDaMunição : NomeDaArma xQuantidade")
+        await update.message.reply_text("Use: /recarregar NomeDaMunição : NomeDaArma xQuantidade")
         return
     item_municao = m.group(1).strip()
     item_arma = m.group(2).strip()
-    qtd_str = m.group(3)
+    qtd_str = m.group(3) or m.group(4)
     qtd = int(qtd_str) if qtd_str else 1
 
     # Verifica se o usuário tem a munição
@@ -1603,59 +1660,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-async def callback_consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-
-    if data.startswith("confirm_consumir_"):
-        _, _, uid_str, item_nome, qtd = data.split("_", 4)
-        uid = int(uid_str)
-        item_nome = unquote(item_nome)
-        qtd = int(qtd)
-        # Só o dono pode confirmar
-        if query.from_user.id != uid:
-            await query.answer("Só o dono pode confirmar!", show_alert=True)
-            return
-
-        # Confirma no inventário
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
-        row = c.fetchone()
-        if not row or row[0] < qtd:
-            conn.close()
-            await query.edit_message_text(f"❌ Quantidade inválida ou item não está mais no inventário.")
-            return
-
-        # Checa se continua sendo consumível no catálogo
-        cat = get_catalog_item(item_nome)
-        if not cat or not cat.get("consumivel"):
-            conn.close()
-            await query.edit_message_text(f"❌ '{item_nome}' não é mais um item consumível.")
-            return
-
-        if qtd == row[0]:
-            c.execute(
-                "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (uid, item_nome)
-            )
-        else:
-            c.execute(
-                "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (row[0] - qtd, uid, item_nome)
-            )
-        conn.commit()
-        conn.close()
-        await query.edit_message_text(f"🍽️ Você consumiu '{item_nome}' x{qtd}!")
-
-    elif data.startswith("cancel_consumir_"):
-        _, _, uid_str = data.split("_", 2)
-        uid = int(uid_str)
-        if query.from_user.id != uid:
-            await query.answer("Só o dono pode cancelar!", show_alert=True)
-            return
-        await query.edit_message_text("❌ Consumo cancelado.")
-
 async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -1706,9 +1710,44 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("❌ Recarga cancelada.")
         return
 
+async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /consumir NomeDoItem xQuantidade (opcional)")
+        return
+    uid = update.effective_user.id
+    nome, qtd = parse_nome_quantidade(context.args)
+    item_nome, item_peso, qtd_inv = buscar_item_inventario(uid, nome)
+    if not item_nome:
+        await update.message.reply_text("❌ Você não possui esse item.")
+        return
+    if qtd < 1 or qtd > qtd_inv:
+        await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
+        return
+    cat_item = get_catalog_item(item_nome)
+    if not cat_item or not cat_item.get("consumivel"):
+        await update.message.reply_text(f"❌ '{item_nome}' não é um item consumível.")
+        return
+    # aplica efeito simples
+    efeito = cat_item.get("tipo")
+    bonus = cat_item.get("bonus", 0)
+    msg = f"🍴 Você consumiu '{item_nome}' x{qtd}."
+    if efeito == "cura":
+        msg += f"\n💚 Recupera {bonus} HP."
+    elif efeito == "dano":
+        msg += f"\n💥 Causa {bonus} de dano (narre a situação)."
+    elif efeito == "municao":
+        msg += "\n⚠️ Use /recarregar para aplicar essa munição."
+    elif efeito == "nenhum":
+        msg += "\n(Nenhum efeito direto, apenas roleplay)."
+    adjust_item_quantity(uid, item_nome, -qtd)
+    await update.message.reply_text(msg)
+
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -1804,7 +1843,7 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -1888,7 +1927,7 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -1905,7 +1944,7 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     healer = get_player(uid)
-    bonus_pers = healer['pericias'].get('Persuasão', 0)
+    bonus_pers = healer['pericias'].get('Manipulação', 0)
     dado = random.randint(1, 6)
     total = dado + bonus_pers
 
@@ -1917,7 +1956,7 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"🎲 {mention(update.effective_user)} aplicou uma sessão de terapia em {alvo_tag}!\n"
         f"Rolagem: 1d6 → {dado}\n"
-        f"Bônus: +{bonus_pers} (Persuasão)\n"
+        f"Bônus: +{bonus_pers} (Manipulação)\n"
         f"Total: {total}\n\n"
         f"{alvo['nome']}: SP {before} → {after}"
     )
@@ -1925,18 +1964,22 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
 
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
-
     player = get_player(uid)
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
     if player['hp'] > 0:
         await update.message.reply_text("❌ Você não está em coma (HP > 0).")
+        return
+
+    # Limite de um teste por dia
+    if not registrar_teste_coma(uid):
+        await update.message.reply_text("⚠️ Você já fez um teste de coma hoje. Só é permitido 1 por dia.")
         return
 
     dados = roll_dados(4, 6)
@@ -1970,7 +2013,7 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -2034,41 +2077,28 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return False
-
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
     player = get_player(uid)
     if not player or len(context.args) < 1:
-        await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo OU /roll d20+2")
+        await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo [+ item1 + item2 ...] OU /roll d20+2")
         return False
 
-    key = " ".join(context.args)
+        raw = " ".join(context.args)
+    partes = [p.strip() for p in raw.split("+")]
+    key = partes[0]
     key_norm = normalizar(key)
-
-    # ROLL LIVRE
-    if key_norm.startswith('d') or 'd' in key_norm:
-        parsed = parse_roll_expr(key_norm)
-        if not parsed:
-            await update.message.reply_text("Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +10.")
-            return False
-        qtd, lados, bonus = parsed
-        dados = [random.randint(1, lados) for _ in range(qtd)]
-        total = sum(dados) + bonus
-        await update.message.reply_text(f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total}")
-        return True
-
-    # ROLL PADRÃO
     bonus = 0
+    penal = 0
     found = False
     real_key = key
-    penal = 0
     if key_norm in ATRIBUTOS_NORMAL:
         real_key = ATRIBUTOS_NORMAL[key_norm]
         bonus += player['atributos'].get(real_key, 0)
         found = True
-        if real_key in ("Força", "Destreza"):
+        if real_key in ("Força", "Agilidade"):
             penal = penalidade_sobrecarga(player)
             bonus += penal
     elif key_norm in PERICIAS_NORMAL:
@@ -2078,22 +2108,43 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         if real_key == "Furtividade":
             penal = penalidade_sobrecarga(player)
             bonus += penal
+    elif key_norm.startswith('d') or 'd' in key_norm:
+        parsed = parse_roll_expr(key_norm)
+        if not parsed:
+            await update.message.reply_text("Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +10.")
+            return False
+        qtd, lados, bonus_extra = parsed
+        dados = [random.randint(1, lados) for _ in range(qtd)]
+        total = sum(dados) + bonus_extra
+        await update.message.reply_text(f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus_extra}\nTotal: {total}")
+        return True
     else:
-        await update.message.reply_text(
-            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
-        )
+        await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
         return False
 
+    detalhes = []
+    for item_nome in partes[1:]:
+        item_nome = item_nome.strip()
+        inv_nome, _, qtd_inv = buscar_item_inventario(uid, item_nome)
+        if inv_nome:
+            cat_item = get_catalog_item(inv_nome)
+            if cat_item and cat_item.get("bonus", 0) > 0:
+                bonus += cat_item["bonus"]
+                detalhes.append(f"{inv_nome}: +{cat_item['bonus']}")
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
     penal_msg = f" (Penalidade de sobrecarga: {penal})" if penal else ""
+    detalhes_msg = f"\nBônus de itens: {'; '.join(detalhes)}" if detalhes else ""
     await update.message.reply_text(
-        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}\nTotal: {total} → {res}"
+        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}{detalhes_msg}\nTotal: {total} → {res}"
     )
     return True
 
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
@@ -2121,6 +2172,9 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def xp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     uid = update.effective_user.id
     semana = semana_atual()
     conn = get_conn()
@@ -2151,6 +2205,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     semana = semana_atual()
     conn = get_conn()
     c = conn.cursor()
@@ -2225,6 +2282,7 @@ def main():
     threading.Thread(target=reset_diario_rerolls, daemon=True).start()
     threading.Thread(target=cleanup_expired_transfers, daemon=True).start()
     threading.Thread(target=thread_reset_xp, daemon=True).start()
+    threading.Thread(target=reset_coma_teste, daemon=True).start()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ficha", ficha))
@@ -2240,7 +2298,7 @@ def main():
     app.add_handler(CommandHandler("abandonar", abandonar))
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar_'))
     app.add_handler(CommandHandler("consumir", consumir))
-    app.add_handler(CallbackQueryHandler(callback_consumir, pattern=r'^confirm_consumir_|^cancel_consumir_'))
+    app.add_handler(CommandHandler("recarregar", recarregar))
     app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^(confirm_recarregar_|cancel_recarregar_)'))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
@@ -2255,7 +2313,6 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
-   
     app.run_polling()
 
 if __name__ == "__main__":
