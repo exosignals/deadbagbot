@@ -2077,23 +2077,40 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
-        return
+        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        return False
+
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
     player = get_player(uid)
     if not player or len(context.args) < 1:
-        await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo [+ item1 + item2 ...] OU /roll d20+2")
+        await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo OU /roll d20+2")
         return False
 
-    raw = " ".join(context.args)
-    partes = [p.strip() for p in raw.split("+")]
-    key = partes[0]
+    key = " ".join(context.args)
     key_norm = normalizar(key)
+
+    # ROLL LIVRE: rolagem de dado puro (ex: /roll d20+2)
+    if key.startswith('d') or 'd' in key:
+        parsed = parse_roll_expr(key)
+        if not parsed:
+            await update.message.reply_text(
+                "Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +10."
+            )
+            return False
+        qtd, lados, bonus = parsed
+        dados = [random.randint(1, lados) for _ in range(qtd)]
+        total = sum(dados) + bonus
+        await update.message.reply_text(
+            f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total}"
+        )
+        return True
+
+    # ROLL PADRÃO: rolagem de atributo/perícia
     bonus = 0
-    penal = 0
     found = False
     real_key = key
+    penal = 0
     if key_norm in ATRIBUTOS_NORMAL:
         real_key = ATRIBUTOS_NORMAL[key_norm]
         bonus += player['atributos'].get(real_key, 0)
@@ -2108,36 +2125,18 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         if real_key == "Furtividade":
             penal = penalidade_sobrecarga(player)
             bonus += penal
-    elif key_norm.startswith('d') or 'd' in key_norm:
-        parsed = parse_roll_expr(key_norm)
-        if not parsed:
-            await update.message.reply_text("Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +10.")
-            return False
-        qtd, lados, bonus_extra = parsed
-        dados = [random.randint(1, lados) for _ in range(qtd)]
-        total = sum(dados) + bonus_extra
-        await update.message.reply_text(f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus_extra}\nTotal: {total}")
-        return True
     else:
-        await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
+        await update.message.reply_text(
+            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
+        )
         return False
 
-    detalhes = []
-    for item_nome in partes[1:]:
-        item_nome = item_nome.strip()
-        inv_nome, _, qtd_inv = buscar_item_inventario(uid, item_nome)
-        if inv_nome:
-            cat_item = get_catalog_item(inv_nome)
-            if cat_item and cat_item.get("bonus", 0) > 0:
-                bonus += cat_item["bonus"]
-                detalhes.append(f"{inv_nome}: +{cat_item['bonus']}")
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
     penal_msg = f" (Penalidade de sobrecarga: {penal})" if penal else ""
-    detalhes_msg = f"\nBônus de itens: {'; '.join(detalhes)}" if detalhes else ""
     await update.message.reply_text(
-        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}{detalhes_msg}\nTotal: {total} → {res}"
+        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}\nTotal: {total} → {res}"
     )
     return True
 
