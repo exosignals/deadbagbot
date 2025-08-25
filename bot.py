@@ -2076,7 +2076,7 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
-    if not anti_spam(update.effective_user.id):
+    if not anti_spam(update.effective_user.id) and not consumir_reroll:
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return False
 
@@ -2091,7 +2091,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     key_norm = normalizar(key)
 
     # ROLL LIVRE: rolagem de dado puro (ex: /roll d20+2)
-    if key.startswith('d') or 'd' in key:
+    if re.match(r"^(\d+)?d\d+([+-]\d+)?$", key.lower()):
         parsed = parse_roll_expr(key)
         if not parsed:
             await update.message.reply_text(
@@ -2141,9 +2141,6 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     return True
 
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
-        return
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
