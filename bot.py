@@ -469,10 +469,12 @@ def roll_dados(qtd=4, lados=6):
     return [random.randint(1, lados) for _ in range(qtd)]
 
 def resultado_roll(valor_total):
-    if valor_total <= 5:
+    if valor_total <= 4:
         return "Fracasso crítico"
-    elif valor_total <= 12:
+    elif valor_total <= 9:
         return "Fracasso"
+    elif valor_total <= 14:
+        return "Normal"
     elif valor_total <= 19:
         return "Sucesso"
     else:
