@@ -34,16 +34,16 @@ ATRIBUTOS_LISTA = [
     "Força",
     "Agilidade",
     "Vitalidade",
-    "Intelecto",
-    "Vigilância",
-    "Carisma"
+    "Raciocínio",
+    "Equilíbrio",
+    "Persuasão"
 ]
 PERICIAS_LISTA = [
     "Luta",
     "Resistência",
     "Furtividade",
     "Pontaria",
-    "Estabilidade",
+    "Reflexo",
     "Sobrevivência",
     "Medicina",
     "Improviso",
@@ -106,9 +106,15 @@ def init_db():
         nome TEXT,
         username TEXT,
         peso_max INTEGER DEFAULT 0,
-        hp INTEGER DEFAULT 40,
-        sp INTEGER DEFAULT 40,
-        rerolls INTEGER DEFAULT 3
+        hp INTEGER DEFAULT 0,
+        sp INTEGER DEFAULT 0,
+        rerolls INTEGER DEFAULT 3,
+        hp_max INTEGER DEFAULT 0,
+        sp_max INTEGER DEFAULT 0,
+        fome INTEGER DEFAULT 0,
+        sede INTEGER DEFAULT 0,
+        sono INTEGER DEFAULT 0,
+        traumas TEXT DEFAULT ''
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS usernames (
         username TEXT PRIMARY KEY,
@@ -161,7 +167,9 @@ def init_db():
         "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
         "ADD COLUMN IF NOT EXISTS muni_atual INTEGER DEFAULT 0",
         "ADD COLUMN IF NOT EXISTS muni_max INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''"
+        "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''",
+        "ADD COLUMN IF NOT EXISTS rest_hunger INTEGER DEFAULT 0",
+        "ADD COLUMN IF NOT EXISTS rest_thirst INTEGER DEFAULT 0"
     ]:
         try:
             c.execute(f"ALTER TABLE catalogo {alter};")
@@ -241,20 +249,24 @@ def get_player(uid):
     if not row:
         conn.close()
         return None
-    player = {
-        "id": row["id"],
-        "nome": row["nome"],
-        "username": row["username"],
-        "peso_max": row["peso_max"],
-        "hp": row["hp"],
-        "hp_max": 40,   # DEFAULT
-        "sp": row["sp"],
-        "sp_max": 40,   # DEFAULT
-        "rerolls": row["rerolls"],
-        "atributos": {},
-        "pericias": {},
-        "inventario": []
-    }
+	player = {
+		"id": row["id"],
+		"nome": row["nome"],
+		"username": row["username"],
+		"peso_max": row["peso_max"],
+		"hp": row["hp"],
+		"hp_max": row["hp_max"],   # <-- usa valor do banco!
+		"sp": row["sp"],
+		"sp_max": row["sp_max"],   # <-- usa valor do banco!
+		"rerolls": row["rerolls"],
+		"fome": row["fome"],       # <-- ADICIONE
+		"sede": row["sede"],       # <-- ADICIONE
+		"sono": row["sono"],       # <-- ADICIONE
+		"traumas": row.get("traumas", ""), # <-- ADICIONE (usa .get só por segurança)
+		"atributos": {},
+		"pericias": {},
+		"inventario": []
+	}
     # Atributos
     c.execute("SELECT nome, valor FROM atributos WHERE player_id=%s", (uid,))
     for a, v in c.fetchall():
@@ -273,6 +285,51 @@ def get_player(uid):
         player["inventario"].append(entry)
     conn.close()
     return player
+
+def vitalidade_para_hp(v):
+    return [10, 15, 20, 25, 30, 35, 40][max(0, min(6, v))]
+
+def equilibrio_para_sp(v):
+    return [10, 15, 20, 25, 30, 35, 40][max(0, min(6, v))]
+
+def faixa_status(val, tipo="fome"):
+    if val < 25:
+        return {"fome": "saciado", "sede": "hidratado", "sono": "descansado"}[tipo]
+    elif val < 50:
+        return "leve"
+    elif val < 75:
+        return "moderada"
+    elif val < 90:
+        return "grave"
+    else:
+        return "crítica"
+
+def update_necessidades(uid, fome_delta=0, sede_delta=0, sono_delta=0):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT fome, sede, sono FROM players WHERE id=%s", (uid,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return
+    fome, sede, sono = row
+    fome = min(100, max(0, fome + fome_delta))
+    sede = min(100, max(0, sede + sede_delta))
+    sono = min(100, max(0, sono + sono_delta))
+    c.execute("UPDATE players SET fome=%s, sede=%s, sono=%s WHERE id=%s", (fome, sede, sono, uid))
+    conn.commit()
+    conn.close()
+
+    # ALERTA AUTOMÁTICO (chame só se update_necessidades for async, senão use create_task)
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(checar_alerta_necessidades(uid, bot_global))
+        else:
+            loop.run_until_complete(checar_alerta_necessidades(uid, bot_global))
+    except:
+        pass
 
 def create_player(uid, nome, username=None):
     conn = get_conn()
@@ -352,24 +409,25 @@ def adjust_item_quantity(uid, item_nome, delta):
 def get_catalog_item(nome: str):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
+    c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
     row = c.fetchone()
     conn.close()
     if not row:
         return None
     return {
         "nome": row[0], "peso": row[1], "consumivel": row[2], "bonus": row[3], "tipo": row[4],
-        "arma_tipo": row[5], "arma_bonus": row[6], "muni_atual": row[7], "muni_max": row[8], "armas_compat": row[9]
+        "arma_tipo": row[5], "arma_bonus": row[6], "muni_atual": row[7], "muni_max": row[8], "armas_compat": row[9],
+        "rest_hunger": row[10], "rest_thirst": row[11]
     }
 
-def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: int = 0, tipo: str = '', arma_tipo: str = '', arma_bonus: int = 0, muni_atual: int = 0, muni_max: int = 0, armas_compat: str = ''):
+def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: int = 0, tipo: str = '', arma_tipo: str = '', arma_bonus: int = 0, muni_atual: int = 0, muni_max: int = 0, armas_compat: str = '', rest_hunger: int = 0, rest_thirst: int = 0):
     conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO catalogo(nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-        "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s",
-        (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat,
-         peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat)
+        "INSERT INTO catalogo(nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat,rest_hunger,rest_thirst) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
+        (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst,
+         peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst)
     )
     conn.commit()
     conn.close()
@@ -465,7 +523,7 @@ def parse_roll_expr(expr):
         return None
     return qtd, lados, bonus
 
-def roll_dados(qtd=4, lados=6):
+def roll_dados(qtd=1, lados=20):
     return [random.randint(1, lados) for _ in range(qtd)]
 
 def resultado_roll(valor_total):
@@ -833,7 +891,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / 40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / 40\n"
+	text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n\n"
@@ -869,11 +927,17 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     EDIT_TIMERS[uid] = threading.Timer(300.0, timeout_edit)
     EDIT_TIMERS[uid].start()
     
+    campos_ficha = ""
+    for a in ATRIBUTOS_LISTA:
+        campos_ficha += f"{a}: \n"
+    for p in PERICIAS_LISTA:
+        campos_ficha += f"{p}: \n"
+
     text = (
         "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n\n"
         " ⤷ <b>EXEMPLO</b>\n\n<blockquote>Força: 3\nImproviso: 2\nMedicina: 1</blockquote>\n\n"
-        "TODOS os Atributos e Perícias, é só copiar, colar, preencher e enviar!\n"
-        "\n<pre>Força: \nAgilidade: \nVitalidade: \nIntelecto: \nVigilância: \nCarisma: \nLuta: \nResistência: \nFurtividade: \nPontaria: \nEstabilidade: \nSobrevivência: \nMedicina: \nImproviso: \nExploração: \nIntuição: \nManipulação: \nConfiança: </pre>\n\n"
+        "TODOS os Atributos e Perícias, é só copiar, colar, preencher e enviar!\n\n"
+        f"<pre>{campos_ficha}</pre>\n"
         " ⓘ <b>ATENÇÃO</b>\n\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
@@ -942,6 +1006,17 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_pericia(uid, per, player["pericias"][per])
     ensure_peso_max_by_forca(uid)
 
+    # Atualiza HP/SP máximos usando os novos valores de atributos
+    vit = player["atributos"].get("Vitalidade", 0)
+    eq = player["atributos"].get("Equilíbrio", 0)
+    hp_max = vitalidade_para_hp(vit)
+    sp_max = equilibrio_para_sp(eq)
+    update_player_field(uid, "hp_max", hp_max)
+    update_player_field(uid, "sp_max", sp_max)
+    # Ajusta HP/SP atuais se acima do novo máximo
+    update_player_field(uid, "hp", min(player["hp"], hp_max))
+    update_player_field(uid, "sp", min(player["sp"], sp_max))
+
     await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
     
     # Limpar estado de edição e cancelar timer
@@ -986,8 +1061,7 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / 40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / 40\n"
-    
+	text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Jogador está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n"
@@ -1097,7 +1171,6 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso: /addconsumivel NomeDoItem Peso [bonus] [armas_compat]")
         return
 
-    # Descobre onde está o peso (primeiro argumento que vira float)
     args = context.args
     peso_idx = None
     for i, arg in enumerate(args):
@@ -1115,7 +1188,6 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = " ".join(args[:peso_idx])
     peso = parse_float_br(args[peso_idx])
 
-    # bônus opcional
     bonus = 0
     armas_compat = ''
     if len(args) > peso_idx + 1:
@@ -1126,7 +1198,6 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             armas_compat = " ".join(args[peso_idx + 1:])
 
-    # Salva info para o próximo passo (tipo do consumível)
     conn = get_conn()
     c = conn.cursor()
     c.execute('''INSERT INTO pending_consumivel (user_id, nome, peso, bonus, armas_compat)
@@ -1136,12 +1207,11 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     await update.message.reply_text(
-        "Esse item consumível é de cura, dano, munição ou nenhum?\nResponda: cura/dano/municao/nenhum"
+        "Esse item consumível é de cura, dano, munição, comida, bebida ou nenhum?\nResponda: cura/dano/municao/comida/bebida/nenhum"
     )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
     uid = update.effective_user.id
-    # Recebe row do handler ou busca do banco
     if row is None:
         conn = get_conn()
         c = conn.cursor()
@@ -1152,12 +1222,20 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
             return
     nome, peso, bonus, armas_compat = row
     tipo = update.message.text.strip().lower()
-    if tipo not in ("cura", "dano", "nenhum", "municao"):
-        await update.message.reply_text("Tipo inválido. Use: cura, dano, municao ou nenhum.")
+    if tipo not in ("cura", "dano", "nenhum", "municao", "comida", "bebida"):
+        await update.message.reply_text("Tipo inválido. Use: cura, dano, municao, comida, bebida ou nenhum.")
+        return
+    # Para comida/bebida, peça o valor em seguida
+    if tipo == "comida":
+        await update.message.reply_text("Quantos pontos de fome esse item reduz? Envie o número.")
+        context.user_data['pending_tipo_consumivel'] = ("comida", nome, peso, bonus, armas_compat)
+        return
+    if tipo == "bebida":
+        await update.message.reply_text("Quantos pontos de sede esse item reduz? Envie o número.")
+        context.user_data['pending_tipo_consumivel'] = ("bebida", nome, peso, bonus, armas_compat)
         return
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
-        # Remove pendência
         conn = get_conn()
         c = conn.cursor()
         c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
@@ -1166,7 +1244,6 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
     except Exception as e:
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
-
 
 async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -1183,8 +1260,23 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row:
         await receber_tipo_consumivel(update, context, row=row)
         return
-    # Senão, ignora
-    
+    # Se aguardando valor de comida/bebida:
+    if 'pending_tipo_consumivel' in context.user_data:
+        tipo, nome, peso, bonus, armas_compat = context.user_data['pending_tipo_consumivel']
+        try:
+            valor = int(update.message.text.strip())
+        except Exception:
+            await update.message.reply_text("Digite apenas o número.")
+            return
+        if tipo == "comida":
+            add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat, rest_hunger=valor)
+            await update.message.reply_text(f"Consumível '{nome}' adicionado ao catálogo. Reduz {valor} de fome.")
+        elif tipo == "bebida":
+            add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat, rest_thirst=valor)
+            await update.message.reply_text(f"Consumível '{nome}' adicionado ao catálogo. Reduz {valor} de sede.")
+        del context.user_data['pending_tipo_consumivel']
+        return
+
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
@@ -1732,7 +1824,6 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not cat_item or not cat_item.get("consumivel"):
         await update.message.reply_text(f"❌ '{item_nome}' não é um item consumível.")
         return
-    # aplica efeito simples
     efeito = cat_item.get("tipo")
     bonus = cat_item.get("bonus", 0)
     msg = f"🍴 Você consumiu '{item_nome}' x{qtd}."
@@ -1742,6 +1833,14 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"\n💥 Causa {bonus} de dano (narre a situação)."
     elif efeito == "municao":
         msg += "\n⚠️ Use /recarregar para aplicar essa munição."
+    elif efeito == "comida":
+        rest = cat_item.get("rest_hunger", 0) * qtd
+        update_necessidades(uid, fome_delta=-rest)
+        msg += f"\n🍽️ Fome reduzida em {rest}."
+    elif efeito == "bebida":
+        rest = cat_item.get("rest_thirst", 0) * qtd
+        update_necessidades(uid, sede_delta=-rest)
+        msg += f"\n💧 Sede reduzida em {rest}."
     elif efeito == "nenhum":
         msg += "\n(Nenhum efeito direto, apenas roleplay)."
     adjust_item_quantity(uid, item_nome, -qtd)
@@ -1926,6 +2025,45 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += f"Total: {total}\n"
     msg += f"{alvo['nome']}: HP {before} → {after}"
     await update.message.reply_text(msg)
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    # Permite consultar outro jogador se admin e parâmetro fornecido
+    if context.args and is_admin(uid):
+        user_tag = context.args[0]
+        target_id = username_to_id(user_tag)
+        if not target_id:
+            await update.message.reply_text("❌ Jogador não encontrado.")
+            return
+        player = get_player(target_id)
+        if not player:
+            await update.message.reply_text("❌ Jogador não encontrado.")
+            return
+    else:
+        player = get_player(uid)
+        if not player:
+            await update.message.reply_text("Use /start primeiro!")
+            return
+
+    hp, hp_max = player.get("hp", 0), player.get("hp_max", 0)
+    sp, sp_max = player.get("sp", 0), player.get("sp_max", 0)
+    fome = player.get("fome", 0)
+    sede = player.get("sede", 0)
+    sono = player.get("sono", 0)
+    traumas = player.get("traumas", "")
+    text = f"📝 <b>Status de {player['nome']}</b>\n\n"
+    text += f"❤️ Vida: {hp}/{hp_max}\n"
+    text += f"🧠 Sanidade: {sp}/{sp_max}\n\n"
+    text += f"🍽️ Fome: {faixa_status(fome, 'fome')}\n"
+    text += f"💧 Sede: {faixa_status(sede, 'sede')}\n"
+    text += f"💤 Sono: {faixa_status(sono, 'sono')}\n\n"
+    if traumas:
+        text += f"<b>Traumas:</b>\n- {traumas.replace(';', '\\n- ')}\n"
+    penal = penalidade_sobrecarga(player)
+    if penal:
+        text += f"\n<b>Penalidades:</b>\n- Sobrepeso: {penal} em Força, Agilidade\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -2124,7 +2262,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         real_key = PERICIAS_NORMAL[key_norm]
         bonus += player['pericias'].get(real_key, 0)
         found = True
-        if real_key == "Furtividade":
+        if real_key in ("Furtividade", "Reflexo"):
             penal = penalidade_sobrecarga(player)
             bonus += penal
     else:
@@ -2263,6 +2401,84 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.callback_query:  # botão
         await update.callback_query.message.reply_text(text, parse_mode="HTML")
 
+async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /dormir [horas]\nExemplo: /dormir 6")
+        return
+    try:
+        horas = int(context.args[0])
+        if horas < 1 or horas > 24:
+            await update.message.reply_text("Informe um valor de horas entre 1 e 24.")
+            return
+    except Exception:
+        await update.message.reply_text("Digite apenas o número de horas dormidas. Exemplo: /dormir 6")
+        return
+
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+
+    # Parâmetros de recuperação
+    multiplicador = 12  # cada hora recupera 12 de sono (8h = 96)
+    sono_antes = player.get("sono", 0)
+    sono_recuperado = min(sono_antes, horas * multiplicador)
+    sono_novo = max(0, sono_antes - sono_recuperado)
+
+    # Proporção de recuperação (quanto maior o sono recuperado, mais HP/SP recupera)
+    hp_max = player.get("hp_max", 40)
+    sp_max = player.get("sp_max", 40)
+    hp_antes = player.get("hp", 0)
+    sp_antes = player.get("sp", 0)
+
+    # Exemplo: dormiu 6h, recuperou 72 pontos de sono; se sono estava em 90, recuperou 72/90 = 80%
+    sono_total = max(sono_antes, 1)
+    proporcao = sono_recuperado / sono_total if sono_antes > 0 else 0
+
+    # HP/SP recuperados são até 20% do máximo, multiplicados pela proporção de sono recuperado
+    rec_hp = int(hp_max * 0.2 * proporcao)
+    rec_sp = int(sp_max * 0.2 * proporcao)
+
+    # Nunca mais que 20% do máximo por "noite"
+    hp_novo = min(hp_max, hp_antes + rec_hp)
+    sp_novo = min(sp_max, sp_antes + rec_sp)
+
+    # Atualizar no banco
+    update_necessidades(uid, sono_delta=-sono_recuperado, fome_delta=+horas*2, sede_delta=+horas*1)
+    update_player_field(uid, "hp", hp_novo)
+    update_player_field(uid, "sp", sp_novo)
+
+    msg = (
+        f"💤 Você dormiu {horas}h."
+        f"\n🛏️ Recuperou {sono_recuperado} de sono ({faixa_status(sono_novo, 'sono')})."
+        f"\n❤️ HP recuperado: {rec_hp} ({hp_antes} → {hp_novo})"
+        f"\n🧠 SP recuperado: {rec_sp} ({sp_antes} → {sp_novo})"
+        f"\n🍽️ Fome aumentou em {horas*2}."
+        f"\n💧 Sede aumentou em {horas*1}."
+    )
+    await update.message.reply_text(msg)
+
+async def checar_alerta_necessidades(uid, bot):
+    player = get_player(uid)
+    if not player:
+        return
+    alertas = []
+    if player.get("fome", 0) >= 90:
+        alertas.append("⚠️ Sua fome está em estado crítico! Consuma comida o quanto antes.")
+    if player.get("sede", 0) >= 90:
+        alertas.append("⚠️ Sua sede está em estado crítico! Beba algo o quanto antes.")
+    if player.get("sono", 0) >= 90:
+        alertas.append("⚠️ Seu sono está em estado crítico! Você precisa dormir urgentemente.")
+    if alertas:
+        try:
+            await bot.send_message(uid, "\n".join(alertas))
+        except Exception:
+            pass
+
 # ================== FLASK ==================
 flask_app = Flask(__name__)
 
@@ -2310,6 +2526,8 @@ def main():
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
+    app.add_handler(CommandHandler("status", status))   # NOVO HANDLER
+	app.add_handler(CommandHandler("dormir", dormir))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
     app.run_polling()
 
