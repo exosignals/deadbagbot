@@ -376,7 +376,7 @@ def update_inventario(uid, item):
                   (uid, item['nome'], item['peso'], item['quantidade']))
     conn.commit()
     conn.close()
-	
+    
 def buscar_item_inventario(uid, nome_procurado):
     conn = get_conn()
     c = conn.cursor()
@@ -891,7 +891,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-	text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n\n"
@@ -1061,7 +1061,7 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-	text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / {player['hp_max']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / {player['sp_max']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Jogador está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n"
@@ -1590,7 +1590,7 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ Você está prestes a abandonar '{item_nome}' x{qtd}. Confirma?",
         reply_markup=reply_markup
     )
-	
+    
 # ========================= CALLBACK ABANDONAR =========================
 async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2527,7 +2527,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(CommandHandler("status", status))   # NOVO HANDLER
-	app.add_handler(CommandHandler("dormir", dormir))
+    app.add_handler(CommandHandler("dormir", dormir))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
     app.run_polling()
 
