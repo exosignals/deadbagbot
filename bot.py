@@ -249,24 +249,24 @@ def get_player(uid):
     if not row:
         conn.close()
         return None
-	player = {
-		"id": row["id"],
-		"nome": row["nome"],
-		"username": row["username"],
-		"peso_max": row["peso_max"],
-		"hp": row["hp"],
-		"hp_max": row["hp_max"],   # <-- usa valor do banco!
-		"sp": row["sp"],
-		"sp_max": row["sp_max"],   # <-- usa valor do banco!
-		"rerolls": row["rerolls"],
-		"fome": row["fome"],       # <-- ADICIONE
-		"sede": row["sede"],       # <-- ADICIONE
-		"sono": row["sono"],       # <-- ADICIONE
-		"traumas": row.get("traumas", ""), # <-- ADICIONE (usa .get só por segurança)
-		"atributos": {},
-		"pericias": {},
-		"inventario": []
-	}
+    player = {
+        "id": row["id"],
+        "nome": row["nome"],
+        "username": row["username"],
+        "peso_max": row["peso_max"],
+        "hp": row["hp"],
+        "hp_max": row["hp_max"],   # <-- usa valor do banco!
+        "sp": row["sp"],
+        "sp_max": row["sp_max"],   # <-- usa valor do banco!
+        "rerolls": row["rerolls"],
+        "fome": row["fome"],       # <-- ADICIONE
+        "sede": row["sede"],       # <-- ADICIONE
+        "sono": row["sono"],       # <-- ADICIONE
+        "traumas": row.get("traumas", ""), # <-- ADICIONE (usa .get só por segurança)
+        "atributos": {},
+        "pericias": {},
+        "inventario": []
+    }
     # Atributos
     c.execute("SELECT nome, valor FROM atributos WHERE player_id=%s", (uid,))
     for a, v in c.fetchall():
