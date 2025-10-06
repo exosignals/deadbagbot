@@ -334,11 +334,15 @@ def update_necessidades(uid, fome_delta=0, sede_delta=0, sono_delta=0):
 def create_player(uid, nome, username=None):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO players(id,nome,username) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, nome, (username or None)))
+    c.execute(
+        "INSERT INTO players(id, nome, username, hp, sp, hp_max, sp_max) VALUES(%s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT DO NOTHING",
+        (uid, nome, (username or None), 0, 0, 0, 0)  # <-- tudo começa em zero!
+    )
     for a in ATRIBUTOS_LISTA:
-        c.execute("INSERT INTO atributos(player_id,nome,valor) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, a, 0))
+        c.execute("INSERT INTO atributos(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, a, 0))
     for p in PERICIAS_LISTA:
-        c.execute("INSERT INTO pericias(player_id,nome,valor) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, p, 0))
+        c.execute("INSERT INTO pericias(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, p, 0))
     conn.commit()
     conn.close()
 
@@ -1013,11 +1017,18 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sp_max = equilibrio_para_sp(eq)
     update_player_field(uid, "hp_max", hp_max)
     update_player_field(uid, "sp_max", sp_max)
-    # Ajusta HP/SP atuais se acima do novo máximo
-    update_player_field(uid, "hp", min(player["hp"], hp_max))
-    update_player_field(uid, "sp", min(player["sp"], sp_max))
 
-    await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
+    # Se HP/SP atual era 0 (ou > novo máximo), iguala ao novo máximo
+    if player["hp"] == 0 or player["hp"] > hp_max:
+        update_player_field(uid, "hp", hp_max)
+    else:
+        update_player_field(uid, "hp", min(player["hp"], hp_max))
+    if player["sp"] == 0 or player["sp"] > sp_max:
+        update_player_field(uid, "sp", sp_max)
+    else:
+        update_player_field(uid, "sp", min(player["sp"], sp_max))
+       
+  await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
     
     # Limpar estado de edição e cancelar timer
     EDIT_PENDING.pop(uid, None)
