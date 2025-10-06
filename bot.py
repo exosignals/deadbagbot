@@ -4,6 +4,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from urllib.parse import quote, unquote
 import psycopg2
 import psycopg2.extras
+from psycopg2 import pool
 import os
 from flask import Flask
 import random
@@ -22,6 +23,8 @@ def normalizar(texto):
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("NEON_DATABASE_URL")
+
+POOL = None
 
 ADMIN_IDS = {int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip().isdigit()}
 PESO_MAX = {1: 5.0, 2: 10.0, 3: 15.0, 4: 20.0, 5: 25.0, 6: 30.0}
@@ -96,146 +99,159 @@ logger = logging.getLogger(__name__)
 
 # ================== POSTGRESQL ==================
 def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
+    """Pega uma conexão do pool."""
+    return POOL.getconn()
+
+def put_conn(conn):
+    """Devolve uma conexão para o pool."""
+    POOL.putconn(conn)
 
 def init_db():
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS players (
-        id BIGINT PRIMARY KEY,
-        nome TEXT,
-        username TEXT,
-        peso_max INTEGER DEFAULT 0,
-        hp INTEGER DEFAULT 0,
-        sp INTEGER DEFAULT 0,
-        rerolls INTEGER DEFAULT 3,
-        hp_max INTEGER DEFAULT 0,
-        sp_max INTEGER DEFAULT 0,
-        fome INTEGER DEFAULT 0,
-        sede INTEGER DEFAULT 0,
-        sono INTEGER DEFAULT 0,
-        traumas TEXT DEFAULT ''
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS usernames (
-        username TEXT PRIMARY KEY,
-        user_id BIGINT,
-        first_name TEXT,
-        last_seen BIGINT
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS atributos (
-        player_id BIGINT,
-        nome TEXT,
-        valor INTEGER DEFAULT 0,
-        PRIMARY KEY(player_id,nome)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pericias (
-        player_id BIGINT,
-        nome TEXT,
-        valor INTEGER DEFAULT 0,
-        PRIMARY KEY(player_id,nome)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS inventario (
-        player_id BIGINT,
-        nome TEXT,
-        peso REAL,
-        quantidade INTEGER DEFAULT 1,
-        PRIMARY KEY(player_id,nome)
-    )''')
-    for alter in [
-        "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
-        "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
-        "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
-        "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS municao_atual INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS municao_max INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''"
-    ]:
-        try:
-            c.execute(f"ALTER TABLE inventario {alter};")
-        except Exception:
-            conn.rollback()
-    c.execute('''CREATE TABLE IF NOT EXISTS catalogo (
-        nome TEXT PRIMARY KEY,
-        peso REAL
-    )''')
-    for alter in [
-        "ADD COLUMN IF NOT EXISTS ultimo_alimento TIMESTAMP DEFAULT NOW()",
-        "ADD COLUMN IF NOT EXISTS ultima_agua TIMESTAMP DEFAULT NOW()",
-        "ADD COLUMN IF NOT EXISTS ultimo_sono TIMESTAMP DEFAULT NOW()"
-    ]:
-        try:
-            c.execute(f"ALTER TABLE players {alter};")
-        except Exception:
-            conn.rollback()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS players (
+            id BIGINT PRIMARY KEY,
+            nome TEXT,
+            username TEXT,
+            peso_max INTEGER DEFAULT 0,
+            hp INTEGER DEFAULT 0,
+            sp INTEGER DEFAULT 0,
+            rerolls INTEGER DEFAULT 3,
+            hp_max INTEGER DEFAULT 0,
+            sp_max INTEGER DEFAULT 0,
+            fome INTEGER DEFAULT 0,
+            sede INTEGER DEFAULT 0,
+            sono INTEGER DEFAULT 0,
+            traumas TEXT DEFAULT ''
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS usernames (
+            username TEXT PRIMARY KEY,
+            user_id BIGINT,
+            first_name TEXT,
+            last_seen BIGINT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS atributos (
+            player_id BIGINT,
+            nome TEXT,
+            valor INTEGER DEFAULT 0,
+            PRIMARY KEY(player_id,nome)
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS pericias (
+            player_id BIGINT,
+            nome TEXT,
+            valor INTEGER DEFAULT 0,
+            PRIMARY KEY(player_id,nome)
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS inventario (
+            player_id BIGINT,
+            nome TEXT,
+            peso REAL,
+            quantidade INTEGER DEFAULT 1,
+            PRIMARY KEY(player_id,nome)
+        )''')
+        for alter in [
+            "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
+            "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
+            "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
+            "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS municao_atual INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS municao_max INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''"
+        ]:
+            try:
+                c.execute(f"ALTER TABLE inventario {alter};")
+            except Exception:
+                conn.rollback()
+        c.execute('''CREATE TABLE IF NOT EXISTS catalogo (
+            nome TEXT PRIMARY KEY,
+            peso REAL
+        )''')
+        for alter in [
+            "ADD COLUMN IF NOT EXISTS ultimo_alimento TIMESTAMP DEFAULT NOW()",
+            "ADD COLUMN IF NOT EXISTS ultima_agua TIMESTAMP DEFAULT NOW()",
+            "ADD COLUMN IF NOT EXISTS ultimo_sono TIMESTAMP DEFAULT NOW()"
+        ]:
+            try:
+                c.execute(f"ALTER TABLE players {alter};")
+            except Exception:
+                conn.rollback()
 
-    for alter in [
-        "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
-        "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
-        "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
-        "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS muni_atual INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS muni_max INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''",
-        "ADD COLUMN IF NOT EXISTS rest_hunger INTEGER DEFAULT 0",
-        "ADD COLUMN IF NOT EXISTS rest_thirst INTEGER DEFAULT 0"
-    ]:
-        try:
-            c.execute(f"ALTER TABLE catalogo {alter};")
-        except Exception:
-            conn.rollback()
-    c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
-        user_id BIGINT PRIMARY KEY,
-        nome TEXT,
-        peso REAL,
-        bonus INTEGER,
-        armas_compat TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
-        target_id BIGINT PRIMARY KEY,
-        bonus INTEGER DEFAULT 0
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS coma_teste (
-        player_id BIGINT PRIMARY KEY,
-        ultima_data DATE
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS turnos (
-        player_id BIGINT,
-        data DATE,
-        caracteres INTEGER,
-        mencoes TEXT,
-        PRIMARY KEY (player_id, data)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS xp_semana (
-        player_id BIGINT,
-        semana_inicio DATE,
-        xp_total INTEGER DEFAULT 0,
-        streak_atual INTEGER DEFAULT 0,
-        PRIMARY KEY (player_id, semana_inicio)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS interacoes_mutuas (
-        semana_inicio DATE,
-        jogador1 BIGINT,
-        jogador2 BIGINT,
-        PRIMARY KEY (semana_inicio, jogador1, jogador2)
-    )''')
-    conn.commit()
-    conn.close()
+        for alter in [
+            "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
+            "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
+            "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
+            "ADD COLUMN IF NOT EXISTS arma_bonus INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS muni_atual INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS muni_max INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''",
+            "ADD COLUMN IF NOT EXISTS rest_hunger INTEGER DEFAULT 0",
+            "ADD COLUMN IF NOT EXISTS rest_thirst INTEGER DEFAULT 0"
+        ]:
+            try:
+                c.execute(f"ALTER TABLE catalogo {alter};")
+            except Exception:
+                conn.rollback()
+        c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
+            user_id BIGINT PRIMARY KEY,
+            nome TEXT,
+            peso REAL,
+            bonus INTEGER,
+            armas_compat TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
+            target_id BIGINT PRIMARY KEY,
+            bonus INTEGER DEFAULT 0
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS coma_teste (
+            player_id BIGINT PRIMARY KEY,
+            ultima_data DATE
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS turnos (
+            player_id BIGINT,
+            data DATE,
+            caracteres INTEGER,
+            mencoes TEXT,
+            PRIMARY KEY (player_id, data)
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS xp_semana (
+            player_id BIGINT,
+            semana_inicio DATE,
+            xp_total INTEGER DEFAULT 0,
+            streak_atual INTEGER DEFAULT 0,
+            PRIMARY KEY (player_id, semana_inicio)
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS interacoes_mutuas (
+            semana_inicio DATE,
+            jogador1 BIGINT,
+            jogador2 BIGINT,
+            PRIMARY KEY (semana_inicio, jogador1, jogador2)
+        )''')
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def register_username(user_id: int, username: str | None, first_name: str | None):
     if not username:
         return
     username = username.lower()
     now = int(time.time())
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("INSERT INTO usernames(username, user_id, first_name, last_seen) VALUES(%s,%s,%s,%s) ON CONFLICT (username) DO UPDATE SET user_id=%s, first_name=%s, last_seen=%s",
-        (username, user_id, first_name or '', now, user_id, first_name or '', now))
-    c.execute("UPDATE players SET username=%s WHERE id=%s", (username, user_id))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO usernames(username, user_id, first_name, last_seen) VALUES(%s,%s,%s,%s) ON CONFLICT (username) DO UPDATE SET user_id=%s, first_name=%s, last_seen=%s",
+            (username, user_id, first_name or '', now, user_id, first_name or '', now))
+        c.execute("UPDATE players SET username=%s WHERE id=%s", (username, user_id))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def username_to_id(user_tag: str) -> int | None:
     if not user_tag:
@@ -244,68 +260,79 @@ def username_to_id(user_tag: str) -> int | None:
         uname = user_tag[1:].lower()
     else:
         uname = user_tag.lower()
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM usernames WHERE username=%s", (uname,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM usernames WHERE username=%s", (uname,))
+        row = c.fetchone()
+        return row[0] if row else None
+    finally:
+        if conn:
+            put_conn(conn)
 
 def get_player(uid):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE id=%s", (uid,))
-    row = c.fetchone()
-    if not row:
-        conn.close()
-        return None
-    player = {
-        "id": row["id"],
-        "nome": row["nome"],
-        "username": row["username"],
-        "peso_max": row["peso_max"],
-        "hp": row["hp"],
-        "hp_max": row["hp_max"],   # <-- usa valor do banco!
-        "sp": row["sp"],
-        "sp_max": row["sp_max"],   # <-- usa valor do banco!
-        "rerolls": row["rerolls"],
-        "fome": row["fome"],       # <-- ADICIONE
-        "sede": row["sede"],       # <-- ADICIONE
-        "sono": row["sono"],       # <-- ADICIONE
-        "traumas": row.get("traumas", ""), # <-- ADICIONE (usa .get só por segurança)
-        "atributos": {},
-        "pericias": {},
-        "inventario": []
-    }
-    # Atributos
-    c.execute("SELECT nome, valor FROM atributos WHERE player_id=%s", (uid,))
-    for a, v in c.fetchall():
-        player["atributos"][a] = v
-    # Perícias
-    c.execute("SELECT nome, valor FROM pericias WHERE player_id=%s", (uid,))
-    for a, v in c.fetchall():
-        player["pericias"][a] = v
-    # Inventário (agora com munição!)
-    c.execute("SELECT nome,peso,quantidade,municao_atual,municao_max FROM inventario WHERE player_id=%s", (uid,))
-    for n, p, q, mun_at, mun_max in c.fetchall():
-        entry = {"nome": n, "peso": p, "quantidade": q}
-        if mun_max is not None:
-            entry["municao_atual"] = mun_at
-            entry["municao_max"] = mun_max
-        player["inventario"].append(entry)
-    conn.close()
-    return player
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM players WHERE id=%s", (uid,))
+        row = c.fetchone()
+        if not row:
+            return None
+        player = {
+            "id": row["id"],
+            "nome": row["nome"],
+            "username": row["username"],
+            "peso_max": row["peso_max"],
+            "hp": row["hp"],
+            "hp_max": row["hp_max"],
+            "sp": row["sp"],
+            "sp_max": row["sp_max"],
+            "rerolls": row["rerolls"],
+            "fome": row["fome"],
+            "sede": row["sede"],
+            "sono": row["sono"],
+            "traumas": row.get("traumas", ""),
+            "atributos": {},
+            "pericias": {},
+            "inventario": []
+        }
+        # Atributos
+        c.execute("SELECT nome, valor FROM atributos WHERE player_id=%s", (uid,))
+        for a, v in c.fetchall():
+            player["atributos"][a] = v
+        # Perícias
+        c.execute("SELECT nome, valor FROM pericias WHERE player_id=%s", (uid,))
+        for a, v in c.fetchall():
+            player["pericias"][a] = v
+        # Inventário (agora com munição!)
+        c.execute("SELECT nome,peso,quantidade,municao_atual,municao_max FROM inventario WHERE player_id=%s", (uid,))
+        for n, p, q, mun_at, mun_max in c.fetchall():
+            entry = {"nome": n, "peso": p, "quantidade": q}
+            if mun_max is not None:
+                entry["municao_atual"] = mun_at
+                entry["municao_max"] = mun_max
+            player["inventario"].append(entry)
+        return player
+    finally:
+        if conn:
+            put_conn(conn)
 
 def resistencia_horas_max(resistencia):
     tabela = {1: 24, 2: 36, 3: 48, 4: 60, 5: 78, 6: 96}
     return tabela.get(max(1, min(6, resistencia)), 24)
 
 def get_horas_sem_recursos(uid):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT ultimo_alimento, ultima_agua, ultimo_sono FROM players WHERE id=%s", (uid,))
-    row = c.fetchone()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT ultimo_alimento, ultima_agua, ultimo_sono FROM players WHERE id=%s", (uid,))
+        row = c.fetchone()
+    finally:
+        if conn:
+            put_conn(conn)
     agora = datetime.now()
     if not row:
         return (None, None, None)
@@ -317,16 +344,20 @@ def get_horas_sem_recursos(uid):
 
 def registrar_consumo(uid, tipo):
     now = datetime.now()
-    conn = get_conn()
-    c = conn.cursor()
-    if tipo == "comida":
-        c.execute("UPDATE players SET ultimo_alimento=%s WHERE id=%s", (now, uid))
-    elif tipo == "bebida":
-        c.execute("UPDATE players SET ultima_agua=%s WHERE id=%s", (now, uid))
-    elif tipo == "sono":
-        c.execute("UPDATE players SET ultimo_sono=%s WHERE id=%s", (now, uid))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        if tipo == "comida":
+            c.execute("UPDATE players SET ultimo_alimento=%s WHERE id=%s", (now, uid))
+        elif tipo == "bebida":
+            c.execute("UPDATE players SET ultima_agua=%s WHERE id=%s", (now, uid))
+        elif tipo == "sono":
+            c.execute("UPDATE players SET ultimo_sono=%s WHERE id=%s", (now, uid))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def vitalidade_para_hp(v):
     return [10, 15, 20, 25, 30, 35, 40][max(0, min(6, v))]
@@ -347,117 +378,140 @@ def faixa_status(val, tipo="fome"):
         return "crítica"
 
 def update_necessidades(uid, fome_delta=0, sede_delta=0, sono_delta=0):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT fome, sede, sono FROM players WHERE id=%s", (uid,))
-    row = c.fetchone()
-    if not row:
-        conn.close()
-        return
-    fome, sede, sono = row
-    fome = min(100, max(0, fome + fome_delta))
-    sede = min(100, max(0, sede + sede_delta))
-    sono = min(100, max(0, sono + sono_delta))
-    c.execute("UPDATE players SET fome=%s, sede=%s, sono=%s WHERE id=%s", (fome, sede, sono, uid))
-    conn.commit()
-    conn.close()
-
-    # ALERTA AUTOMÁTICO (chame só se update_necessidades for async, senão use create_task)
-    import asyncio
+    conn = None
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(checar_alerta_necessidades(uid, bot_global))
-        else:
-            loop.run_until_complete(checar_alerta_necessidades(uid, bot_global))
-    except:
-        pass
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT fome, sede, sono FROM players WHERE id=%s", (uid,))
+        row = c.fetchone()
+        if not row:
+            return
+        fome, sede, sono = row
+        fome = min(100, max(0, fome + fome_delta))
+        sede = min(100, max(0, sede + sede_delta))
+        sono = min(100, max(0, sono + sono_delta))
+        c.execute("UPDATE players SET fome=%s, sede=%s, sono=%s WHERE id=%s", (fome, sede, sono, uid))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def create_player(uid, nome, username=None):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO players(id, nome, username, hp, sp, hp_max, sp_max) VALUES(%s, %s, %s, %s, %s, %s, %s) "
-        "ON CONFLICT DO NOTHING",
-        (uid, nome, (username or None), 0, 0, 0, 0)  # <-- tudo começa em zero!
-    )
-    for a in ATRIBUTOS_LISTA:
-        c.execute("INSERT INTO atributos(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, a, 0))
-    for p in PERICIAS_LISTA:
-        c.execute("INSERT INTO pericias(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, p, 0))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO players(id, nome, username, hp, sp, hp_max, sp_max) VALUES(%s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (uid, nome, (username or None), 0, 0, 0, 0)
+        )
+        for a in ATRIBUTOS_LISTA:
+            c.execute("INSERT INTO atributos(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, a, 0))
+        for p in PERICIAS_LISTA:
+            c.execute("INSERT INTO pericias(player_id, nome, valor) VALUES(%s, %s, %s) ON CONFLICT DO NOTHING", (uid, p, 0))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def update_player_field(uid, field, value):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(f"UPDATE players SET {field}=%s WHERE id=%s", (value, uid))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(f"UPDATE players SET {field}=%s WHERE id=%s", (value, uid))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def update_atributo(uid, nome, valor):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE atributos SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE atributos SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def update_pericia(uid, nome, valor):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE pericias SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE pericias SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def update_inventario(uid, item):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item['nome']))
-    row = c.fetchone()
-    if row:
-        c.execute("UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                  (item['quantidade'], item['peso'], uid, item['nome']))
-    else:
-        c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES (%s, %s, %s, %s)",
-                  (uid, item['nome'], item['peso'], item['quantidade']))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item['nome']))
+        row = c.fetchone()
+        if row:
+            c.execute("UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                      (item['quantidade'], item['peso'], uid, item['nome']))
+        else:
+            c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES (%s, %s, %s, %s)",
+                      (uid, item['nome'], item['peso'], item['quantidade']))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
     
 def buscar_item_inventario(uid, nome_procurado):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s", (uid,))
-    rows = c.fetchall()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s", (uid,))
+        rows = c.fetchall()
+    finally:
+        if conn:
+            put_conn(conn)
     for nome, peso, quantidade in rows:
         if normalizar(nome) == normalizar(nome_procurado):
             return nome, peso, quantidade
     return None, None, None
 
 def adjust_item_quantity(uid, item_nome, delta):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
-    row = c.fetchone()
-    if not row:
-        conn.close()
-        return False
-    qtd, peso = row
-    nova = qtd + delta
-    if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
-    else:
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, item_nome))
-    conn.commit()
-    conn.close()
-    return True
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
+        row = c.fetchone()
+        if not row:
+            return False
+        qtd, peso = row
+        nova = qtd + delta
+        if nova <= 0:
+            c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
+        else:
+            c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, item_nome))
+        conn.commit()
+        return True
+    finally:
+        if conn:
+            put_conn(conn)
 
 def get_catalog_item(nome: str):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
-    row = c.fetchone()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
+        row = c.fetchone()
+    finally:
+        if conn:
+            put_conn(conn)
     if not row:
         return None
     return {
@@ -467,70 +521,94 @@ def get_catalog_item(nome: str):
     }
 
 def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: int = 0, tipo: str = '', arma_tipo: str = '', arma_bonus: int = 0, muni_atual: int = 0, muni_max: int = 0, armas_compat: str = '', rest_hunger: int = 0, rest_thirst: int = 0):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO catalogo(nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat,rest_hunger,rest_thirst) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-        "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
-        (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst,
-         peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst)
-    )
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO catalogo(nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat,rest_hunger,rest_thirst) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
+            (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst,
+             peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst)
+        )
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def del_catalog_item(nome: str) -> bool:
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
-    deleted = c.rowcount
-    conn.commit()
-    conn.close()
-    return deleted > 0
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
+        deleted = c.rowcount
+        conn.commit()
+        return deleted > 0
+    finally:
+        if conn:
+            put_conn(conn)
 
 def list_catalog():
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat FROM catalogo ORDER BY nome COLLATE \"C\"")
-    data = c.fetchall()
-    conn.close()
-    return data
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat FROM catalogo ORDER BY nome COLLATE \"C\"")
+        data = c.fetchall()
+        return data
+    finally:
+        if conn:
+            put_conn(conn)
     
 def add_weapon_to_inventory(uid, nome, peso, quantidade, municao_atual, municao_max):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO inventario (player_id, nome, peso, quantidade, municao_atual, municao_max)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (player_id, nome) DO UPDATE
-        SET quantidade = inventario.quantidade + %s,
-            peso = %s,
-            municao_atual = %s,
-            municao_max = %s
-    """, (uid, nome, peso, quantidade, municao_atual, municao_max, quantidade, peso, municao_atual, municao_max))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO inventario (player_id, nome, peso, quantidade, municao_atual, municao_max)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (player_id, nome) DO UPDATE
+            SET quantidade = inventario.quantidade + %s,
+                peso = %s,
+                municao_atual = %s,
+                municao_max = %s
+        """, (uid, nome, peso, quantidade, municao_atual, municao_max, quantidade, peso, municao_atual, municao_max))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def update_weapon_ammo(uid, nome, nova_municao):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        UPDATE inventario
-        SET municao_atual = %s
-        WHERE player_id = %s AND nome = %s
-    """, (nova_municao, uid, nome))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            UPDATE inventario
+            SET municao_atual = %s
+            WHERE player_id = %s AND nome = %s
+        """, (nova_municao, uid, nome))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def is_consumivel_catalogo(nome: str):
     item = get_catalog_item(nome)
     return item and item.get("consumivel")
 
 def remove_item(uid, item_nome):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def peso_total(player):
     return sum(i['peso'] * i.get('quantidade', 1) for i in player.get("inventario", []))
@@ -594,49 +672,64 @@ def parse_float_br(s: str) -> float | None:
         return None
 
 def ensure_peso_max_by_forca(uid: int):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT valor FROM atributos WHERE player_id=%s AND nome='Força'", (uid,))
-    row = c.fetchone()
-    if row:
-        valor_forca = max(1, min(6, int(row[0])))
-        novo = PESO_MAX.get(valor_forca, 0)
-        c.execute("UPDATE players SET peso_max=%s WHERE id=%s", (novo, uid))
-        conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT valor FROM atributos WHERE player_id=%s AND nome='Força'", (uid,))
+        row = c.fetchone()
+        if row:
+            valor_forca = max(1, min(6, int(row[0])))
+            novo = PESO_MAX.get(valor_forca, 0)
+            c.execute("UPDATE players SET peso_max=%s WHERE id=%s", (novo, uid))
+            conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def add_coma_bonus(target_id: int, delta: int):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("INSERT INTO coma_bonus(target_id, bonus) VALUES(%s,0) ON CONFLICT (target_id) DO NOTHING", (target_id,))
-    c.execute("UPDATE coma_bonus SET bonus = bonus + %s WHERE target_id=%s", (delta, target_id))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO coma_bonus(target_id, bonus) VALUES(%s,0) ON CONFLICT (target_id) DO NOTHING", (target_id,))
+        c.execute("UPDATE coma_bonus SET bonus = bonus + %s WHERE target_id=%s", (delta, target_id))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def pop_coma_bonus(target_id: int) -> int:
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT bonus FROM coma_bonus WHERE target_id=%s", (target_id,))
-    row = c.fetchone()
-    bonus = row[0] if row else 0
-    c.execute("DELETE FROM coma_bonus WHERE target_id=%s", (target_id,))
-    conn.commit()
-    conn.close()
-    return bonus
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT bonus FROM coma_bonus WHERE target_id=%s", (target_id,))
+        row = c.fetchone()
+        bonus = row[0] if row else 0
+        c.execute("DELETE FROM coma_bonus WHERE target_id=%s", (target_id,))
+        conn.commit()
+        return bonus
+    finally:
+        if conn:
+            put_conn(conn)
 
 def registrar_teste_coma(uid: int) -> bool:
     hoje = datetime.now().date()
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT ultima_data FROM coma_teste WHERE player_id=%s", (uid,))
-    row = c.fetchone()
-    if row and row[0] == hoje:
-        conn.close()
-        return False
-    c.execute("INSERT INTO coma_teste(player_id, ultima_data) VALUES(%s,%s) ON CONFLICT (player_id) DO UPDATE SET ultima_data=%s", (uid, hoje, hoje))
-    conn.commit()
-    conn.close()
-    return True
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT ultima_data FROM coma_teste WHERE player_id=%s", (uid,))
+        row = c.fetchone()
+        if row and row[0] == hoje:
+            return False
+        c.execute("INSERT INTO coma_teste(player_id, ultima_data) VALUES(%s,%s) ON CONFLICT (player_id) DO UPDATE SET ultima_data=%s", (uid, hoje, hoje))
+        conn.commit()
+        return True
+    finally:
+        if conn:
+            put_conn(conn)
 
 def reset_coma_teste():
     while True:
@@ -646,12 +739,16 @@ def reset_coma_teste():
             next_reset += timedelta(days=1)
         wait_seconds = (next_reset - now).total_seconds()
         time.sleep(wait_seconds)
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("DELETE FROM coma_teste")
-        conn.commit()
-        conn.close()
-        logger.info("🧊 Resetei testes de coma!")
+        conn = None
+        try:
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("DELETE FROM coma_teste")
+            conn.commit()
+            logger.info("🧊 Resetei testes de coma!")
+        finally:
+            if conn:
+                put_conn(conn)
 
 def parse_nome_quantidade(args):
     # Aceita "item x2", "item 2", "item"
@@ -678,14 +775,16 @@ def reset_diario_rerolls():
                 next_reset += timedelta(days=1)
             wait_seconds = (next_reset - now).total_seconds()
             time.sleep(wait_seconds)
-            
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE players SET rerolls=3")
-            conn.commit()
-            conn.close()
-            logger.info("🔄 Rerolls diários resetados!")
-            
+            conn = None
+            try:
+                conn = get_conn()
+                c = conn.cursor()
+                c.execute("UPDATE players SET rerolls=3")
+                conn.commit()
+                logger.info("🔄 Rerolls diários resetados!")
+            finally:
+                if conn:
+                    put_conn(conn)
         except Exception as e:
             logger.error(f"Erro no reset de rerolls: {e}")
             time.sleep(60)
@@ -751,137 +850,136 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
     semana = semana_atual()
 
     texto = update.message.text or ""
-    # aceita também /turno@BotUsername
     texto_limpo = re.sub(r'^/turno(?:@\w+)?', '', texto, flags=re.IGNORECASE).strip()
     caracteres = len(texto_limpo)
 
-    conn = get_conn()
-    c = conn.cursor()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
 
-    # Bloqueia segunda tentativa no mesmo dia apenas se já houver um turno VÁLIDO registrado
-    c.execute("SELECT 1 FROM turnos WHERE player_id=%s AND data=%s", (uid, hoje))
-    if c.fetchone():
-        conn.close()
-        await update.message.reply_text("Você já enviou seu turno hoje! Apenas 1 por dia é contabilizado.")
-        return
+        c.execute("SELECT 1 FROM turnos WHERE player_id=%s AND data=%s", (uid, hoje))
+        if c.fetchone():
+            await update.message.reply_text("Você já enviou seu turno hoje! Apenas 1 por dia é contabilizado.")
+            return
 
-    # 🚨 Caso a pessoa mande só /turno sem texto
-    if not texto_limpo:
-        conn.close()
-        await update.message.reply_text(
-            "ℹ️ Para registrar um turno, use este comando seguido do seu texto.\n\n"
-            "Exemplo:\n"
-            "<code>/turno O personagem caminhou pela floresta, descrevendo as árvores geladas...</code>\n\n"
-            "⚠️ O texto precisa ter no mínimo 499 caracteres para ser contabilizado.",
-            parse_mode="HTML"
+        if not texto_limpo:
+            await update.message.reply_text(
+                "ℹ️ Para registrar um turno, use este comando seguido do seu texto.\n\n"
+                "Exemplo:\n"
+                "<code>/turno O personagem caminhou pela floresta, descrevendo as árvores geladas...</code>\n\n"
+                "⚠️ O texto precisa ter no mínimo 499 caracteres para ser contabilizado.",
+                parse_mode="HTML"
+            )
+            return
+
+        if caracteres < 499:
+            await update.message.reply_text(
+                f"⚠️ Seu turno precisa ter pelo menos 499 caracteres! (Atualmente: {caracteres})\n"
+                "Nada foi registrado. Envie novamente com mais conteúdo."
+            )
+            return
+
+        mencoes = set(re.findall(r"@(\w+)", texto_limpo))
+        if username:
+            mencoes.discard(username.lower())
+        mencoes = list(mencoes)
+        if len(mencoes) > 5:
+            mencoes = mencoes[:5]
+            await update.message.reply_text("⚠️ Só é possível mencionar até 5 jogadores por turno. Apenas os 5 primeiros serão considerados.")
+        mencoes_str = ",".join(mencoes) if mencoes else ""
+
+        xp = xp_por_caracteres(caracteres)
+
+        c.execute("SELECT data FROM turnos WHERE player_id=%s AND data >= %s ORDER BY data", (uid, semana))
+        dias = [row[0] for row in c.fetchall()]
+        streak_atual = 1
+        if dias:
+            prev = dias[-1]
+            if (hoje - prev).days == 1:
+                streak_atual = len(dias) + 1
+            else:
+                streak_atual = 1
+
+        bonus_streak = 0
+        if streak_atual == 3:
+            bonus_streak = 5
+        elif streak_atual == 5:
+            bonus_streak = 10
+        elif streak_atual == 7:
+            bonus_streak = 20
+
+        xp_dia = min(xp + bonus_streak, 25)
+
+        c.execute(
+            "INSERT INTO turnos (player_id, data, caracteres, mencoes) VALUES (%s, %s, %s, %s)",
+            (uid, hoje, caracteres, mencoes_str)
         )
-        return
-
-    # ✅ Validação de tamanho mínimo: não salva nada quando inválido
-    if caracteres < 499:
-        conn.close()  # garante que a conexão não fique aberta
-        await update.message.reply_text(
-            f"⚠️ Seu turno precisa ter pelo menos 499 caracteres! (Atualmente: {caracteres})\n"
-            "Nada foi registrado. Envie novamente com mais conteúdo."
+        c.execute(
+            "INSERT INTO xp_semana (player_id, semana_inicio, xp_total, streak_atual) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (player_id, semana_inicio) DO UPDATE SET xp_total = xp_semana.xp_total + %s, streak_atual = %s",
+            (uid, semana, xp_dia, streak_atual, xp_dia, streak_atual)
         )
-        return
 
-    mencoes = set(re.findall(r"@(\w+)", texto_limpo))
-    if username:
-        mencoes.discard(username.lower())
-    mencoes = list(mencoes)
-    if len(mencoes) > 5:
-        mencoes = mencoes[:5]
-        await update.message.reply_text("⚠️ Só é possível mencionar até 5 jogadores por turno. Apenas os 5 primeiros serão considerados.")
-    mencoes_str = ",".join(mencoes) if mencoes else ""
+        interacoes_bonificadas = set()
+        for mencionado in mencoes:
+            mencionado_id = username_to_id(f"@{mencionado}")
+            if mencionado_id and mencionado_id != uid:
+                c.execute("SELECT mencoes FROM turnos WHERE player_id=%s AND data=%s", (mencionado_id, hoje))
+                row = c.fetchone()
+                if row and row[0]:
+                    mencoes_do_outra_pessoa = set(row[0].split(","))
+                    if username and username.lower() in mencoes_do_outra_pessoa:
+                        par = tuple(sorted([uid, mencionado_id]))
+                        if par not in interacoes_bonificadas:
+                            c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (uid, semana))
+                            c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (mencionado_id, semana))
+                            interacoes_bonificadas.add(par)
+                            try:
+                                await context.bot.send_message(uid, f"🎉 Você e @{mencionado} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
+                                await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
+                            except Exception as e:
+                                logger.warning(f"Falha ao enviar mensagem privada de bônus: {e}")
 
-    xp = xp_por_caracteres(caracteres)
+        conn.commit()
 
-    c.execute("SELECT data FROM turnos WHERE player_id=%s AND data >= %s ORDER BY data", (uid, semana))
-    dias = [row[0] for row in c.fetchall()]
-    streak_atual = 1
-    if dias:
-        prev = dias[-1]
-        if (hoje - prev).days == 1:
-            streak_atual = len(dias) + 1
-        else:
-            streak_atual = 1
-
-    bonus_streak = 0
-    if streak_atual == 3:
-        bonus_streak = 5
-    elif streak_atual == 5:
-        bonus_streak = 10
-    elif streak_atual == 7:
-        bonus_streak = 20
-
-    xp_dia = min(xp + bonus_streak, 25)
-
-    # Só insere porque já passou na validação (>= 499)
-    c.execute(
-        "INSERT INTO turnos (player_id, data, caracteres, mencoes) VALUES (%s, %s, %s, %s)",
-        (uid, hoje, caracteres, mencoes_str)
-    )
-    c.execute(
-        "INSERT INTO xp_semana (player_id, semana_inicio, xp_total, streak_atual) VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (player_id, semana_inicio) DO UPDATE SET xp_total = xp_semana.xp_total + %s, streak_atual = %s",
-        (uid, semana, xp_dia, streak_atual, xp_dia, streak_atual)
-    )
-
-    # Interação mútua diária
-    interacoes_bonificadas = set()
-    for mencionado in mencoes:
-        mencionado_id = username_to_id(f"@{mencionado}")
-        if mencionado_id and mencionado_id != uid:
-            c.execute("SELECT mencoes FROM turnos WHERE player_id=%s AND data=%s", (mencionado_id, hoje))
-            row = c.fetchone()
-            if row and row[0]:
-                mencoes_do_outra_pessoa = set(row[0].split(","))
-                if username and username.lower() in mencoes_do_outra_pessoa:
-                    par = tuple(sorted([uid, mencionado_id]))
-                    if par not in interacoes_bonificadas:
-                        c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (uid, semana))
-                        c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (mencionado_id, semana))
-                        interacoes_bonificadas.add(par)
-                        try:
-                            await context.bot.send_message(uid, f"🎉 Você e @{mencionado} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
-                            await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
-                        except Exception as e:
-                            logger.warning(f"Falha ao enviar mensagem privada de bônus: {e}")
-
-    conn.commit()
-    conn.close()
-
-    msg = f"Turno registrado!\nCaracteres: {caracteres}\nXP ganho hoje: {xp}"
-    if bonus_streak:
-        msg += f"\nBônus de streak: +{bonus_streak} XP"
-    msg += f"\nStreak atual: {streak_atual} dias"
-    await update.message.reply_text(msg)
+        msg = f"Turno registrado!\nCaracteres: {caracteres}\nXP ganho hoje: {xp}"
+        if bonus_streak:
+            msg += f"\nBônus de streak: +{bonus_streak} XP"
+        msg += f"\nStreak atual: {streak_atual} dias"
+        await update.message.reply_text(msg)
+    finally:
+        if conn:
+            put_conn(conn)
 
 def ranking_semanal(context=None):
     semana = semana_atual()
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
-    top = c.fetchall()
-    players = {pid: get_player(pid) for pid, _ in top}
-    lines = ["🏆 Ranking Final da Semana:"]
-    medals = ['🥇', '🥈', '🥉']
-    for idx, (pid, xp) in enumerate(top):
-        nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
-        lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
-    texto = "\n".join(lines)
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
+        top = c.fetchall()
+        players = {pid: get_player(pid) for pid, _ in top}
+        lines = ["🏆 Ranking Final da Semana:"]
+        medals = ['🥇', '🥈', '🥉']
+        for idx, (pid, xp) in enumerate(top):
+            nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
+            lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
+        texto = "\n".join(lines)
 
-    if context:
-        for admin_id in ADMIN_IDS:
-            try:
-                context.bot.send_message(admin_id, texto, parse_mode='HTML')
-            except Exception as e:
-                logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
+        if context:
+            for admin_id in ADMIN_IDS:
+                try:
+                    context.bot.send_message(admin_id, texto, parse_mode='HTML')
+                except Exception as e:
+                    logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
 
-    c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
-    conn.commit()
-    conn.close()
+        c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
 
 def thread_reset_xp():
     while True:
@@ -1251,17 +1349,20 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             armas_compat = " ".join(args[peso_idx + 1:])
 
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute('''INSERT INTO pending_consumivel (user_id, nome, peso, bonus, armas_compat)
-                 VALUES (%s, %s, %s, %s, %s)
-                 ON CONFLICT (user_id) DO UPDATE SET nome=%s, peso=%s, bonus=%s, armas_compat=%s, created_at=NOW()''',
-              (uid, nome, peso, bonus, armas_compat, nome, peso, bonus, armas_compat))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(
-        "Esse item consumível é de cura, dano, munição, comida, bebida ou nenhum?\nResponda: cura/dano/municao/comida/bebida/nenhum"
-    )
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('''INSERT INTO pending_consumivel (user_id, nome, peso, bonus, armas_compat)
+                     VALUES (%s, %s, %s, %s, %s)
+                     ON CONFLICT (user_id) DO UPDATE SET nome=%s, peso=%s, bonus=%s, armas_compat=%s, created_at=NOW()''',
+                  (uid, nome, peso, bonus, armas_compat, nome, peso, bonus, armas_compat))
+    finally:
+        if conn:
+            put_conn(conn)
+            await update.message.reply_text(
+                "Esse item consumível é de cura, dano, munição, comida, bebida ou nenhum?\nResponda: cura/dano/municao/comida/bebida/nenhum"
+            )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
     uid = update.effective_user.id
@@ -1291,14 +1392,17 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
         # Remove pendência
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
-    except Exception as e:
-        await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
+        conn = None
+        try:
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
+        finally:
+            if conn:
+                put_conn(conn)
+                await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
+            except Exception as e:
+                await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
 
 async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -1329,11 +1433,16 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
     # Se está aguardando tipo de consumível
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
-    row = c.fetchone()
-    conn.close()
+    conn = None
+    row = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+        row = c.fetchone()
+    finally:
+        if conn:
+            put_conn(conn)
     if row:
         await receber_tipo_consumivel(update, context, row=row)
         return
@@ -1672,9 +1781,10 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.answer("Só o dono pode confirmar!", show_alert=True)
             return
 
-        conn = get_conn()
-        c = conn.cursor()
+        conn = None
         try:
+            conn = get_conn()
+            c = conn.cursor()
             c.execute(
                 "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (uid, item_nome)
@@ -1701,7 +1811,8 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text("❌ Erro ao abandonar o item.")
             return
         finally:
-            conn.close()
+            if conn:
+                put_conn(conn)
 
         jogador = get_player(uid)
         total_peso = peso_total(jogador)
@@ -1897,12 +2008,14 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if efeito == "comida":
         rest = cat_item.get("rest_hunger", 0) * qtd
         update_necessidades(uid, fome_delta=-rest)
-        registrar_consumo(uid, "comida")  # <-- ADICIONE ESTA LINHA
+        registrar_consumo(uid, "comida")
+        await checar_alerta_necessidades(uid, context.bot)
         msg += f"\n🍽️ Fome reduzida em {rest}."
     elif efeito == "bebida":
         rest = cat_item.get("rest_thirst", 0) * qtd
         update_necessidades(uid, sede_delta=-rest)
-        registrar_consumo(uid, "bebida")  # <-- ADICIONE ESTA LINHA
+        registrar_consumo(uid, "bebida")
+        await checar_alerta_necessidades(uid, context.bot)
         msg += f"\n💧 Sede reduzida em {rest}."
     elif efeito == "nenhum":
         msg += "\n(Nenhum efeito direto, apenas roleplay)."
@@ -2528,7 +2641,7 @@ async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Atualizar no banco
     update_necessidades(uid, sono_delta=-sono_recuperado, fome_delta=+horas*2, sede_delta=+horas*1)
-    registrar_consumo(uid, "sono")  # <-- ADICIONE ESTA LINHA
+    registrar_consumo(uid, "sono")
     update_player_field(uid, "hp", hp_novo)
     update_player_field(uid, "sp", sp_novo)
 
@@ -2540,7 +2653,7 @@ async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"\n🍽️ Fome aumentou em {horas*2}."
         f"\n💧 Sede aumentou em {horas*1}."
     )
-    await update.message.reply_text(msg)
+    await checar_alerta_necessidades(uid, context.bot)
 
 async def checar_alerta_necessidades(uid, bot):
     player = get_player(uid)
@@ -2571,6 +2684,20 @@ def run_flask():
 
 # ========== MAIN ==========
 def main():
+    global POOL
+    try:
+        # Inicia o pool com no mínimo 1 e no máximo 15 conexões
+        POOL = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            dsn=DATABASE_URL,
+            cursor_factory=psycopg2.extras.DictCursor
+        )
+        print("✅ Pool de conexões com o banco de dados iniciado com sucesso.")
+    except Exception as e:
+        logger.error(f"❌ Falha ao iniciar o pool de conexões: {e}")
+        return # Não inicia o bot se não conectar ao banco
+
     init_db()
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=reset_diario_rerolls, daemon=True).start()
