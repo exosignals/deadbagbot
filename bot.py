@@ -1028,7 +1028,7 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         update_player_field(uid, "sp", min(player["sp"], sp_max))
        
-  await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
+    await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
     
     # Limpar estado de edição e cancelar timer
     EDIT_PENDING.pop(uid, None)
