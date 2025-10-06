@@ -168,7 +168,7 @@ def init_db():
             c.execute(f"ALTER TABLE players {alter};")
         except Exception:
             conn.rollback()
-    )''')
+
     for alter in [
         "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
         "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
