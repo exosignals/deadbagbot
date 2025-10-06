@@ -1223,6 +1223,7 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
     uid = update.effective_user.id
+    # Recebe row do handler ou busca do banco
     if row is None:
         conn = get_conn()
         c = conn.cursor()
@@ -1247,6 +1248,7 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         return
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
+        # Remove pendência
         conn = get_conn()
         c = conn.cursor()
         c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
