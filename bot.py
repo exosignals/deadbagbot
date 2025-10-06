@@ -160,6 +160,16 @@ def init_db():
         peso REAL
     )''')
     for alter in [
+        "ADD COLUMN IF NOT EXISTS ultimo_alimento TIMESTAMP DEFAULT NOW()",
+        "ADD COLUMN IF NOT EXISTS ultima_agua TIMESTAMP DEFAULT NOW()",
+        "ADD COLUMN IF NOT EXISTS ultimo_sono TIMESTAMP DEFAULT NOW()"
+    ]:
+        try:
+            c.execute(f"ALTER TABLE players {alter};")
+        except Exception:
+            conn.rollback()
+    )''')
+    for alter in [
         "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
         "ADD COLUMN IF NOT EXISTS bonus INTEGER DEFAULT 0",
         "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
@@ -285,6 +295,38 @@ def get_player(uid):
         player["inventario"].append(entry)
     conn.close()
     return player
+
+def resistencia_horas_max(resistencia):
+    tabela = {1: 24, 2: 36, 3: 48, 4: 60, 5: 78, 6: 96}
+    return tabela.get(max(1, min(6, resistencia)), 24)
+
+def get_horas_sem_recursos(uid):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT ultimo_alimento, ultima_agua, ultimo_sono FROM players WHERE id=%s", (uid,))
+    row = c.fetchone()
+    conn.close()
+    agora = datetime.now()
+    if not row:
+        return (None, None, None)
+    ua, ug, us = row
+    horas_sem_comer = (agora - ua).total_seconds()/3600 if ua else None
+    horas_sem_beber = (agora - ug).total_seconds()/3600 if ug else None
+    horas_sem_dormir = (agora - us).total_seconds()/3600 if us else None
+    return (horas_sem_comer, horas_sem_beber, horas_sem_dormir)
+
+def registrar_consumo(uid, tipo):
+    now = datetime.now()
+    conn = get_conn()
+    c = conn.cursor()
+    if tipo == "comida":
+        c.execute("UPDATE players SET ultimo_alimento=%s WHERE id=%s", (now, uid))
+    elif tipo == "bebida":
+        c.execute("UPDATE players SET ultima_agua=%s WHERE id=%s", (now, uid))
+    elif tipo == "sono":
+        c.execute("UPDATE players SET ultimo_sono=%s WHERE id=%s", (now, uid))
+    conn.commit()
+    conn.close()
 
 def vitalidade_para_hp(v):
     return [10, 15, 20, 25, 30, 35, 40][max(0, min(6, v))]
@@ -1264,15 +1306,6 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid in EDIT_PENDING:
         await receber_edicao(update, context)
         return
-    # Se está aguardando tipo de consumível
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        await receber_tipo_consumivel(update, context, row=row)
-        return
     # Se aguardando valor de comida/bebida:
     if 'pending_tipo_consumivel' in context.user_data:
         tipo, nome, peso, bonus, armas_compat = context.user_data['pending_tipo_consumivel']
@@ -1288,6 +1321,21 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat, rest_thirst=valor)
             await update.message.reply_text(f"Consumível '{nome}' adicionado ao catálogo. Reduz {valor} de sede.")
         del context.user_data['pending_tipo_consumivel']
+        # Remover pendência no banco!
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
+        conn.commit()
+        conn.close()
+        return
+    # Se está aguardando tipo de consumível
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        await receber_tipo_consumivel(update, context, row=row)
         return
 
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1846,13 +1894,15 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"\n💥 Causa {bonus} de dano (narre a situação)."
     elif efeito == "municao":
         msg += "\n⚠️ Use /recarregar para aplicar essa munição."
-    elif efeito == "comida":
+    if efeito == "comida":
         rest = cat_item.get("rest_hunger", 0) * qtd
         update_necessidades(uid, fome_delta=-rest)
+        registrar_consumo(uid, "comida")  # <-- ADICIONE ESTA LINHA
         msg += f"\n🍽️ Fome reduzida em {rest}."
     elif efeito == "bebida":
         rest = cat_item.get("rest_thirst", 0) * qtd
         update_necessidades(uid, sede_delta=-rest)
+        registrar_consumo(uid, "bebida")  # <-- ADICIONE ESTA LINHA
         msg += f"\n💧 Sede reduzida em {rest}."
     elif efeito == "nenhum":
         msg += "\n(Nenhum efeito direto, apenas roleplay)."
@@ -2068,9 +2118,25 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"📝 <b>Status de {player['nome']}</b>\n\n"
     text += f"❤️ Vida: {hp}/{hp_max}\n"
     text += f"🧠 Sanidade: {sp}/{sp_max}\n\n"
-    text += f"🍽️ Fome: {faixa_status(fome, 'fome')}\n"
-    text += f"💧 Sede: {faixa_status(sede, 'sede')}\n"
-    text += f"💤 Sono: {faixa_status(sono, 'sono')}\n\n"
+    resistencia = player["pericias"].get("Resistência", 1)
+    max_horas = resistencia_horas_max(resistencia)
+    horas_sem_comer, horas_sem_beber, horas_sem_dormir = get_horas_sem_recursos(player["id"])
+    text += f"🍽️ Fome: {faixa_status(fome, 'fome')}"
+    if horas_sem_comer is not None:
+        text += f" | {horas_sem_comer:.1f}h sem comer (máx {max_horas}h)\n"
+    else:
+        text += "\n"
+    text += f"💧 Sede: {faixa_status(sede, 'sede')}"
+    if horas_sem_beber is not None:
+        text += f" | {horas_sem_beber:.1f}h sem beber (máx {max_horas}h)\n"
+    else:
+        text += "\n"
+    text += f"💤 Sono: {faixa_status(sono, 'sono')}"
+    if horas_sem_dormir is not None:
+        text += f" | {horas_sem_dormir:.1f}h sem dormir (máx {max_horas}h)\n"
+    else:
+        text += "\n"
+    text += "\n"
     if traumas:
         text += f"<b>Traumas:</b>\n- {traumas.replace(';', '\\n- ')}\n"
     penal = penalidade_sobrecarga(player)
@@ -2462,6 +2528,7 @@ async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Atualizar no banco
     update_necessidades(uid, sono_delta=-sono_recuperado, fome_delta=+horas*2, sede_delta=+horas*1)
+    registrar_consumo(uid, "sono")  # <-- ADICIONE ESTA LINHA
     update_player_field(uid, "hp", hp_novo)
     update_player_field(uid, "sp", sp_novo)
 
