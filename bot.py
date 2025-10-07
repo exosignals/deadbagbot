@@ -99,8 +99,14 @@ logger = logging.getLogger(__name__)
 
 # ================== POSTGRESQL ==================
 def get_conn():
-    """Pega uma conexão do pool."""
-    return POOL.getconn()
+    conn = POOL.getconn()
+    try:
+        with conn.cursor() as c:
+            c.execute("SELECT 1")
+    except psycopg2.Error:
+        POOL.putconn(conn, close=True)
+        conn = POOL.getconn()
+    return conn
 
 def put_conn(conn):
     """Devolve uma conexão para o pool."""
