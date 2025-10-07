@@ -1565,7 +1565,6 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = c.fetchone()
     conn.close()
     if row:
-        # Pega o tipo que o usuário digitou
         tipo = update.message.text.strip().lower()
         nome, peso, bonus, armas_compat = row
         if tipo not in ("cura", "dano", "nenhum", "municao", "comida", "bebida"):
