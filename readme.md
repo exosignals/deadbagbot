@@ -1,33 +1,32 @@
-
 # 🤖 Deadline RPG Bot (Telegram)
 
-Um bot completo de RPG para Telegram, com gerenciamento de ficha, inventário, vida/sanidade, necessidades, rolagem de dados, armas, XP, ranking e administração — tudo conectado em banco PostgreSQL (Neon) para persistência real.
+Um bot COMPLETO de RPG para Telegram, 100% Python, com gerenciamento avançado de ficha, inventário, vida/sanidade, necessidades, rolagens, armas, XP, ranking, administração e persistência real via banco PostgreSQL (Neon). Ideal para campanhas narrativas, roleplay e gerenciamento de mesa — tudo automatizado!
 
 ---
 
-## 🚀 Funcionalidades Principais
+## 🚀 FUNCIONALIDADES PRINCIPAIS
 
-- **Cadastro automático de jogadores:** `/start`
-- **Ficha completa:** atributos, perícias, HP, SP, inventário, traumas, fome, sede e sono
-- **Edição guiada da ficha:** `/editarficha`
-- **Inventário com cálculo de peso, penalidades e sobrecarga**
-- **Catálogo global de itens, armas e consumíveis**
-- **Sistema de armas e munições:** tipos melee/range, recarga, balas, compatibilidade
-- **Consumíveis:** efeitos de cura, dano, comida, bebida, munição, etc.
-- **Necessidades:** fome, sede e sono afetam o personagem (com alertas automáticos)
-- **Transferência e abandono de itens:** `/dar`, `/abandonar`, com confirmação
-- **Testes de atributos/perícias (1d20 + bônus), rolagens livres (XdY+Z):** `/roll`
-- **Registro de turnos para XP, streaks e ranking semanal**
-- **Sistema de XP:** bônus por atividade, interações, streak
-- **Rerolls diários:** gastáveis em /roll, reset às 6h
+- **Cadastro automático:** `/start`
+- **Ficha de personagem:** atributos, perícias, HP, SP, inventário, traumas, fome, sede, sono, peso máximo e penalidades
+- **Edição guiada:** `/editarficha` com template fácil de preencher
+- **Inventário inteligente:** cálculo de peso, penalidades, sobrecarga, armas, munições, consumíveis
+- **Catálogo global:** admins podem cadastrar/remover itens, armas e consumíveis
+- **Sistema de armas:** melee/range, recarga, balas, compatibilidade por tipo de munição
+- **Consumíveis com efeitos:** cura, dano, comida, bebida, munição, etc.
+- **Necessidades reais:** fome, sede, sono afetam o personagem; alertas automáticos quando críticos
+- **Transferência e abandono de itens:** `/dar`, `/abandonar`, ambos com confirmação
+- **Testes de atributos/perícias (1d20+bônus) e rolagens livres (XdY+Z):** `/roll`
+- **Registro de turnos para XP:** streaks, bônus por menções mútuas, ranking semanal automatizado
+- **Sistema de XP:** bônus por atividade, streak, interações
+- **Rerolls diários:** para refazer rolagens, reset às 6h
 - **Sistema de traumas, terapia e coma**
 - **Comandos administrativos completos**
 - **Anti-spam automático**
-- **API Flask embutida para healthcheck**
+- **API Flask embutida para healthcheck/deploy**
 
 ---
 
-## 🧑‍💻 Ficha do Jogador
+## 🧑‍💻 FICHA DO JOGADOR
 
 - **Atributos** (total: 20 pontos, cada um 1–6):
   - Força, Agilidade, Vitalidade, Raciocínio, Equilíbrio, Persuasão
@@ -37,23 +36,23 @@ Um bot completo de RPG para Telegram, com gerenciamento de ficha, inventário, v
 - **SP (Sanidade):** Máximo depende do Equilíbrio
 - **Necessidades:** Fome, sede, sono (quanto maior, pior)
 - **Traumas:** texto livre, pode ser gerado em colapsos de SP
-- **Peso máximo:** conforme Força, com penalidades quando sobrecarregado
-- **Inventário:** lista de itens, armas, munições, quantidades e pesos
+- **Peso máximo:** conforme Força, com penalidades por sobrecarga
+- **Inventário:** itens, armas, munições, quantidades, pesos, efeitos
 
 ---
 
-## 🎲 Sistema de Rolagem
+## 🎲 SISTEMA DE ROLAGEM
 
-### **Testes de Atributos ou Perícias**
+### Testes de Atributos ou Perícias
 
 - **Comando:** `/roll <atributo|perícia>`
-- **Mecânica:** Rola 1d20 + bônus do atributo/perícia + penalidade se sobrecarregado
-- **Exemplo de uso:**
+- **Mecânica:** 1d20 + bônus do atributo/perícia + penalidade se sobrecarregado
+- **Exemplo:**
   ```
   /roll Força
   /roll Medicina
   ```
-  **Saída típica:**
+  **Saída:**
   ```
   🎲 /roll Força
   Rolagem: 1d20 → 13
@@ -61,15 +60,15 @@ Um bot completo de RPG para Telegram, com gerenciamento de ficha, inventário, v
   Total: 17 → Sucesso
   ```
 
-### **Rolagem Livre**
+### Rolagem Livre
 
 - **Comando:** `/roll XdY+Z`
 - **Exemplo:** `/roll d6`, `/roll 2d8+3`
-- **Limites:** até 5 dados, bônus até +10
+- **Limite:** até 5 dados, bônus máximo +10
 
 ---
 
-## ⚖️ Peso Máximo & Penalidades
+## ⚖️ PESO MÁXIMO & PENALIDADES
 
 | Força | Peso Máx (kg) |
 |-------|---------------|
@@ -80,83 +79,82 @@ Um bot completo de RPG para Telegram, com gerenciamento de ficha, inventário, v
 | 5     | 25            |
 | 6     | 30            |
 
-- **Penalidade:** Sobrepeso reduz Força, Agilidade e Furtividade em até -3.
+- **Penalidade:** Sobrepeso reduz Força, Agilidade e Furtividade (até -3).
 - **Comando:** `/inventario` mostra o peso total, penalidade e cada item.
 
 ---
 
-## 🏪 Comandos de Itens & Inventário
+## 🏪 COMANDOS DE ITENS & INVENTÁRIO
 
-- `/itens` — Lista o catálogo global de itens e armas
-- `/additem Nome Peso` — (Admin) Adiciona item simples ao catálogo
-- `/addarma Nome Peso melee/range Bônus [mun_atual/mun_max]` — (Admin) Adiciona arma
-- `/addconsumivel Nome Peso [bônus] [armas_compat]` — (Admin) Adiciona consumível e define tipo/efeito
+- `/itens` — Lista catálogo global de itens e armas
+- `/additem Nome Peso` — (Admin) Adiciona item ao catálogo
+- `/addarma Nome Peso melee/range Bônus [mun_atual/mun_max]` — (Admin) Adiciona arma ao catálogo
+- `/addconsumivel Nome Peso [bônus] [armas_compat]` — (Admin) Adiciona consumível ao catálogo, define efeito/tipo
 - `/delitem Nome` — (Admin) Remove item do catálogo
-- `/inventario` — Mostra seu inventário e peso
-- `/dar @jogador Item x2` — Envia itens para outro jogador (com confirmação)
-- `/abandonar Item x1` — Descarta itens
+- `/inventario` — Mostra inventário e peso do jogador
+- `/dar @jogador Item x2` — Envia item para outro jogador, com confirmação
+- `/abandonar Item x1` — Descarta item do inventário
 
 ---
 
-## 🍽️ Necessidades (Fome, Sede, Sono)
+## 🍽️ NECESSIDADES (FOME, SEDE, SONO)
 
 - **Consumir comida/bebida:** `/consumir NomeDoItem`
   - Exemplo: `/consumir Barrinha x2`
 - **Dormir:** `/dormir 6` (horas)
   - Recupera sono e parte do HP/SP; aumenta fome e sede
-- **Alertas automáticos** são enviados quando fome, sede ou sono atingem valores críticos.
+- **Alertas automáticos** para valores críticos de necessidades
 
 ---
 
-## 💀 Saúde, Sanidade, Curar, Dano, Terapia
+## 💀 SAÚDE, SANIDADE, CURA, DANO, TERAPIA
 
 - `/dano hp|sp [@alvo] [arma/consumível/perícia]` — Aplica dano físico ou mental
-- `/cura [@alvo] NomeDoKitOuConsumível` — Usa item de cura (kit ou consumível)
+- `/cura [@alvo] NomeDoKitOuConsumível` — Usa kit ou consumível de cura
 - `/terapia @alvo` — Recupera SP via Manipulação
-- `/coma` — Realiza teste de coma ao zerar HP
-- `/ajudar @alvo NomeDoKit` — Aplica bônus no próximo teste de coma do alvo
+- `/inconsciente` — Teste de coma ao zerar HP (1/dia)
+- `/ajudar @alvo NomeDoKit` — Aplica bônus no teste de coma do alvo
 
 ---
 
-## 📈 Sistema de XP, Turnos e Ranking
+## 📈 XP, TURNOS E RANKING
 
 - **Turnos de roleplay:** `/turno <texto>`
   - Gera XP conforme tamanho do texto (mín. 499 caracteres)
   - Bônus por streak (dias consecutivos) e menções mútuas
-- **XP semanal:** `/xp` mostra seu XP, streak e detalhes
+- **XP semanal:** `/xp` mostra XP, streak e detalhes do jogador
 - **Ranking:** `/ranking` ou botão no /xp mostra o top 10 da semana
-- **Reset:** Ranking semanal reseta (e avisa admins) toda segunda às 6h
+- **Reset:** Ranking semanal reseta e avisa admins toda segunda às 6h
 
 ---
 
-## 🔄 Rerolls
+## 🔄 REROLLS
 
-- **Você tem até 3 rerolls diários** para refazer rolagens de teste
+- **Até 3 rerolls diários** para refazer rolagens de teste
 - **Comando:** `/reroll <atributo|perícia>`
-- **Reset:** todos os rerolls são renovados às 6h
+- **Reset automático** às 6h
 
 ---
 
-## 👑 Comandos Especiais de Admin
+## 👑 ADMINISTRAÇÃO
 
 - `/verficha @jogador` — Consulta ficha completa de outro jogador
-- `/status [@jogador]` — Consulta status de necessidades de outro jogador
-- `/additem`, `/addarma`, `/addconsumivel`, `/delitem` — Gerenciamento de catálogo
+- `/status [@jogador]` — Consulta necessidades/status de outro jogador
+- `/liberar @jogador` / `/desliberar @jogador` — Gerencia acesso
+- `/additem`, `/addarma`, `/addconsumivel`, `/delitem` — Gerenciamento do catálogo
 
 ---
 
-## 📦 Exemplos de Uso
+## 📦 EXEMPLOS DE USO
 
-### **Cadastro e Ficha**
-
+### Cadastro e Ficha
 ```
 /start
 /ficha
 /editarficha
 ```
 
-### **Edição de Ficha**
-
+### Edição de Ficha
 O comando `/editarficha` envia um template:
 ```
 Força: 4
@@ -170,30 +168,26 @@ Luta: 4
 ```
 Altere, cole e envie para atualizar sua ficha.
 
-### **Transferência de Itens**
-
+### Transferência de Itens
 ```
 /dar @fulano Barrinha x2
 ```
-O destinatário recebe um botão de confirmação.
+O destinatário recebe botão de confirmação.
 
-### **Consumo e Necessidades**
-
+### Consumo e Necessidades
 ```
 /consumir Água
 /dormir 8
 /status
 ```
 
-### **Dano e Cura**
-
+### Dano e Cura
 ```
 /dano hp @fulano Faca
 /cura @fulano Kit Básico
 ```
 
-### **Rolagem Customizada**
-
+### Rolagem Customizada
 ```
 /roll d20+2
 /roll 3d6
@@ -201,29 +195,26 @@ O destinatário recebe um botão de confirmação.
 
 ---
 
-## 🛠️ Deploy no Render + Neon (PostgreSQL)
+## 🛠️ DEPLOY NO RENDER + NEON (POSTGRESQL)
 
-1. Suba `bot.py`, `requirements.txt`, `readme.md` no seu repositório.
-2. Crie um banco gratuito no [Neon](https://neon.tech), copie a **Database URL**.
-3. No [Render](https://render.com), crie um **Web Service** ligado ao seu repo.
+1. Suba `testinhobot.py`, `requirements.txt`, `readme.md` no seu repositório.
+2. Crie banco gratuito no [Neon](https://neon.tech), copie a **Database URL**.
+3. No [Render](https://render.com), crie um **Web Service** ligado ao repo.
 4. Adicione variáveis de ambiente:
-
-```
-BOT_TOKEN=seu_token
-NEON_DATABASE_URL=postgres://...
-ADMINS=123456789,987654321
-```
-
+   ```
+   BOT_TOKEN=seu_token
+   NEON_DATABASE_URL=postgres://...
+   ADMINS=123456789,987654321
+   ```
 5. Confirme que `psycopg2-binary` está em `requirements.txt`.
 6. No campo **Start Command**, coloque:
-
-```
-python bot.py
-```
+   ```
+   python testinhobot.py
+   ```
 
 ---
 
-## 📦 Dependências
+## 📦 DEPENDÊNCIAS
 
 - `python-telegram-bot`
 - `psycopg2-binary`
@@ -231,22 +222,19 @@ python bot.py
 
 ---
 
-## 💡 Observações
+## 💡 OBSERVAÇÕES
 
-- Todos os dados dos jogadores são persistidos em banco
-- Inventário e catálogo são separados
-- Rerolls e XP resetam às 6h
+- Dados dos jogadores são persistidos em banco PostgreSQL
+- Inventário e catálogo globais separados
+- Rerolls e XP resetam automaticamente às 6h
 - Ranking semanal é automatizado
 - Bot aceita comandos de texto e menus do Telegram
+- Estrutura extensível para novas funcionalidades
 
 ---
 
-## 🤝 Contribuição
+## 🤝 CONTRIBUIÇÃO
 
-Pull requests e sugestões são bem-vindos!
+Pull requests e sugestões são super bem-vindos!
 
 Feito por [exosignals](https://github.com/exosignals)
-```
-
-**Pronto! README.md atualizado com explicação de comandos, fluxos e exemplos, completamente alinhado com o seu código atual.**
-Se precisar de exemplos ainda mais detalhados ou de um tutorial de ficha, posso complementar!
