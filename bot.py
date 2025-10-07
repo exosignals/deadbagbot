@@ -237,10 +237,41 @@ def init_db():
             jogador2 BIGINT,
             PRIMARY KEY (semana_inicio, jogador1, jogador2)
         )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS liberados (
+            user_id BIGINT PRIMARY KEY
+        )''')
         conn.commit()
     finally:
         if conn:
             put_conn(conn)
+
+def liberar_usuario(user_id: int):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("INSERT INTO liberados (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user_id,))
+    conn.commit()
+    put_conn(conn)
+
+def desliberar_usuario(user_id: int):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM liberados WHERE user_id=%s", (user_id,))
+    conn.commit()
+    put_conn(conn)
+
+def is_liberado(uid: int) -> bool:
+    if is_admin(uid):  # Admins sempre liberados
+        return True
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM liberados WHERE user_id=%s", (uid,))
+    res = c.fetchone()
+    put_conn(conn)
+    return bool(res)
+
+# Função utilitária para checagem de acesso em todos comandos
+def acesso_negado(update):
+    return update.message.reply_text("🚫 Você precisa ser liberado por um administrador para usar o bot.")
 
 def register_username(user_id: int, username: str | None, first_name: str | None):
     if not username:
@@ -845,7 +876,107 @@ def xp_por_caracteres(n):
     else:
         return 40
 
+def ranking_semanal(context=None):
+    semana = semana_atual()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
+        top = c.fetchall()
+        players = {pid: get_player(pid) for pid, _ in top}
+        lines = ["🏆 Ranking Final da Semana:"]
+        medals = ['🥇', '🥈', '🥉']
+        for idx, (pid, xp) in enumerate(top):
+            nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
+            lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
+        texto = "\n".join(lines)
+
+        if context:
+            for admin_id in ADMIN_IDS:
+                try:
+                    context.bot.send_message(admin_id, texto, parse_mode='HTML')
+                except Exception as e:
+                    logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
+
+        c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
+        conn.commit()
+    finally:
+        if conn:
+            put_conn(conn)
+
+def thread_reset_xp():
+    while True:
+        now = datetime.now()
+        proxima = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        while proxima.weekday() != 0:
+            proxima += timedelta(days=1)
+        if now >= proxima:
+            proxima += timedelta(days=7)
+        wait = (proxima - now).total_seconds()
+        time.sleep(wait)
+        ranking_semanal()
+
+# ================== COMANDOS ==================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
+    uid = update.effective_user.id
+    nome = update.effective_user.first_name
+    username = update.effective_user.username
+    if not get_player(uid):
+        create_player(uid, nome, username)
+        register_username(uid, username, nome)
+        update_player_field(uid, 'hp_max', 40)
+        update_player_field(uid, 'sp_max', 40)
+    await update.message.reply_text(
+    f"\u200B\n 𐚁  𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome} ! \n\n"
+    "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar.\n\n"
+    "Use o comando <b>/ficha</b> para visualizar sua ficha atual. "
+    "Para editá-la, use o comando <b>/editarficha</b>.\n\n"
+    "Outros comandos úteis: <b>/roll</b>, <b>/inventario</b>, <b>/dar</b>, <b>/abandonar</b>, <b>/dano</b>, <b>/cura</b>, <b>/terapia</b>.\n\n"
+    " 𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲!\n\u200B",
+    parse_mode="HTML"
+)
+
+async def liberar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Apenas administradores podem liberar jogadores.")
+        return
+    if not context.args:
+        await update.message.reply_text("Uso: /liberar @jogador")
+        return
+    target_tag = context.args[0]
+    target_id = username_to_id(target_tag)
+    if not target_id:
+        await update.message.reply_text("❌ Jogador não encontrado.")
+        return
+    liberar_usuario(target_id)
+    await update.message.reply_text(f"✅ Jogador {target_tag} liberado para usar o bot.")
+
+async def desliberar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Apenas administradores podem desliberar jogadores.")
+        return
+    if not context.args:
+        await update.message.reply_text("Uso: /desliberar @jogador")
+        return
+    target_tag = context.args[0]
+    target_id = username_to_id(target_tag)
+    if not target_id:
+        await update.message.reply_text("❌ Jogador não encontrado.")
+        return
+    desliberar_usuario(target_id)
+    await update.message.reply_text(f"❌ Jogador {target_tag} removido da lista de liberados.")
+
 async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if update.message.chat.type == 'private':
         await update.message.reply_text("Este comando só pode ser usado em grupos!")
         return
@@ -958,72 +1089,10 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             put_conn(conn)
 
-def ranking_semanal(context=None):
-    semana = semana_atual()
-    conn = None
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
-        top = c.fetchall()
-        players = {pid: get_player(pid) for pid, _ in top}
-        lines = ["🏆 Ranking Final da Semana:"]
-        medals = ['🥇', '🥈', '🥉']
-        for idx, (pid, xp) in enumerate(top):
-            nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
-            lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
-        texto = "\n".join(lines)
-
-        if context:
-            for admin_id in ADMIN_IDS:
-                try:
-                    context.bot.send_message(admin_id, texto, parse_mode='HTML')
-                except Exception as e:
-                    logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
-
-        c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
-        conn.commit()
-    finally:
-        if conn:
-            put_conn(conn)
-
-def thread_reset_xp():
-    while True:
-        now = datetime.now()
-        proxima = now.replace(hour=6, minute=0, second=0, microsecond=0)
-        while proxima.weekday() != 0:
-            proxima += timedelta(days=1)
-        if now >= proxima:
-            proxima += timedelta(days=7)
-        wait = (proxima - now).total_seconds()
-        time.sleep(wait)
-        ranking_semanal()
-
-# ================== COMANDOS ==================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
-        return
-    uid = update.effective_user.id
-    nome = update.effective_user.first_name
-    username = update.effective_user.username
-    if not get_player(uid):
-        create_player(uid, nome, username)
-        register_username(uid, username, nome)
-        update_player_field(uid, 'hp_max', 40)
-        update_player_field(uid, 'sp_max', 40)
-    await update.message.reply_text(
-    f"\u200B\n 𐚁  𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome} ! \n\n"
-    "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar.\n\n"
-    "Use o comando <b>/ficha</b> para visualizar sua ficha atual. "
-    "Para editá-la, use o comando <b>/editarficha</b>.\n\n"
-    "Outros comandos úteis: <b>/roll</b>, <b>/inventario</b>, <b>/dar</b>, <b>/abandonar</b>, <b>/dano</b>, <b>/cura</b>, <b>/terapia</b>.\n\n"
-    " 𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲!\n\u200B",
-    parse_mode="HTML"
-)
-
 async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1052,6 +1121,9 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1232,6 +1304,9 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1261,6 +1336,9 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1371,6 +1449,9 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     uid = update.effective_user.id
     # Recebe row do handler ou busca do banco
     if row is None:
@@ -1411,6 +1492,9 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
             put_conn(conn)
 
 async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     uid = update.effective_user.id
     # Se está editando ficha
     if uid in EDIT_PENDING:
@@ -1519,6 +1603,9 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========================= DAR =========================
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1741,6 +1828,9 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========================= COMANDO ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1848,6 +1938,9 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer("Callback inválido.", show_alert=True)
 
 async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -1983,6 +2076,9 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2029,6 +2125,9 @@ async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2125,6 +2224,9 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2209,6 +2311,12 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
     uid = update.effective_user.id
 
     # Permite consultar outro jogador se admin e parâmetro fornecido
@@ -2264,6 +2372,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2300,9 +2411,12 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def inconsciente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
 
     uid = update.effective_user.id
@@ -2312,24 +2426,24 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Use /start primeiro!")
         return
     if player['hp'] > 0:
-        await update.message.reply_text("❌ Você não está em coma (HP > 0).")
+        await update.message.reply_text("❌ Você não está inconsciente (HP > 0).")
         return
 
     # Limite de um teste por dia
     if not registrar_teste_coma(uid):
-        await update.message.reply_text("⚠️ Você já fez um teste de coma hoje. Só é permitido 1 por dia.")
+        await update.message.reply_text("⚠️ Você já fez um teste de inconsciente hoje. Só é permitido 1 por dia.")
         return
 
-    dados = roll_dados(4, 6)
-    soma = sum(dados)
-    bonus_ajuda = pop_coma_bonus(uid)
-    total = soma + bonus_ajuda
+    resistencia = player['pericias'].get('Resistência', 0)
+    dado = random.randint(1, 20)
+    bonus_ajuda = pop_coma_bonus(uid)  # Se quiser manter sistema de bônus externo
+    total = dado + resistencia + bonus_ajuda
 
     # Definir resultado narrativo
     if total <= 5:
         status = "☠️ Morte súbita! O corpo não resistiu, e a escuridão se fechou."
     elif total <= 12:
-        status = "💀 Continua em coma. O corpo permanece inconsciente, lutando por cada respiração."
+        status = "💀 Continua inconsciente. O corpo permanece desacordado, lutando por cada respiração."
     elif total <= 19:
         update_player_field(uid, 'hp', 1)
         status = "🌅 Você desperta, fraco e atordoado. HP agora: 1."
@@ -2341,79 +2455,19 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "\n".join([
-            "🧊 **Teste de Coma**",
-            f"Rolagens dos dados: {dados} → {soma}",
+            "🧊 **Teste de Inconsciente**",
+            f"Rolagem: 1d20 → {dado}",
+            f"Bônus de Resistência: +{resistencia}",
             f"Bônus de ajuda: +{bonus_ajuda}",
             f"Total final: {total}",
             f"Resultado: {status}",
         ])
     )
 
-async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
-        return
-    uid = update.effective_user.id
-    register_username(uid, update.effective_user.username, update.effective_user.first_name)
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /ajudar @jogador NomeDoKitOuConsumivel")
-        return
-    alvo_tag = context.args[0]
-    alvo_id = username_to_id(alvo_tag)
-    if not alvo_id:
-        await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start.")
-        return
-    alvo = get_player(alvo_id)
-    if alvo['hp'] > 0:
-        await update.message.reply_text("❌ O alvo não está em coma no momento.")
-        return
-    item_input = " ".join(context.args[1:]).strip()
-    item_nome, _, qtd_inv = buscar_item_inventario(uid, item_input)
-    if not item_nome or qtd_inv < 1:
-        await update.message.reply_text(f"❌ Você não possui '{item_input}' no inventário.")
-        return
-    cat = get_catalog_item(item_nome)
-    bonus = 0
-    tipo_item = ''
-    if cat:
-        if cat['arma_tipo']:
-            await update.message.reply_text("❌ Armas não podem ser usadas para ajudar em coma.")
-            return
-        if cat['consumivel'] and cat['tipo'] == "cura":
-            bonus = cat['bonus']
-            tipo_item = "consumível"
-        elif cat['consumivel'] and cat['tipo'] != "cura":
-            await update.message.reply_text("❌ Esse consumível não serve para ajuda em coma.")
-            return
-        elif not cat['consumivel']:
-            key = normalizar(item_nome)
-            bonus = KIT_BONUS.get(key)
-            if bonus is None:
-                await update.message.reply_text("❌ Item inválido. Use um kit médico (Básico/Intermediário/Avançado) ou um consumível de cura.")
-                return
-            tipo_item = "kit"
-    else:
-        key = normalizar(item_nome)
-        bonus = KIT_BONUS.get(key)
-        if bonus is None:
-            await update.message.reply_text("❌ Item inválido. Use um kit médico (Básico/Intermediário/Avançado) ou um consumível de cura.")
-            return
-        tipo_item = "kit"
-    nova = qtd_inv - 1
-    conn = get_conn()
-    c = conn.cursor()
-    if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
-    else:
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, item_nome))
-    conn.commit()
-    conn.close()
-    add_coma_bonus(alvo_id, bonus)
-    await update.message.reply_text(
-        f"🤝 {mention(update.effective_user)} usou '{item_nome}' em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}."
-    )
-
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id) and not consumir_reroll:
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return False
@@ -2479,6 +2533,9 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     return True
 
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
@@ -2506,6 +2563,9 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def xp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2539,6 +2599,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
@@ -2600,6 +2663,9 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(text, parse_mode="HTML")
 
 async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_liberado(update.effective_user.id):
+        await acesso_negado(update)
+        return
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
@@ -2692,7 +2758,6 @@ def run_flask():
 def main():
     global POOL
     try:
-        # Inicia o pool com no mínimo 1 e no máximo 15 conexões
         POOL = psycopg2.pool.ThreadedConnectionPool(
             minconn=1,
             maxconn=10,
@@ -2702,7 +2767,7 @@ def main():
         print("✅ Pool de conexões com o banco de dados iniciado com sucesso.")
     except Exception as e:
         logger.error(f"❌ Falha ao iniciar o pool de conexões: {e}")
-        return # Não inicia o bot se não conectar ao banco
+        return
 
     init_db()
     threading.Thread(target=run_flask, daemon=True).start()
@@ -2730,8 +2795,9 @@ def main():
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
-    app.add_handler(CommandHandler("coma", coma))
-    app.add_handler(CommandHandler("ajudar", ajudar))
+    app.add_handler(CommandHandler("inconsciente", inconsciente)) # ALTERAÇÃO
+    app.add_handler(CommandHandler("liberar", liberar))           # ALTERAÇÃO
+    app.add_handler(CommandHandler("desliberar", desliberar))     # ALTERAÇÃO
     app.add_handler(CommandHandler("roll", roll))
     app.add_handler(CommandHandler("reroll", reroll))
     app.add_handler(CommandHandler("editarficha", editarficha))
@@ -2739,7 +2805,7 @@ def main():
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
-    app.add_handler(CommandHandler("status", status))   # NOVO HANDLER
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("dormir", dormir))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
     app.run_polling()
