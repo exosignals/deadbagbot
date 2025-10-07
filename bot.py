@@ -1474,6 +1474,7 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      VALUES (%s, %s, %s, %s, %s)
                      ON CONFLICT (user_id) DO UPDATE SET nome=%s, peso=%s, bonus=%s, armas_compat=%s, created_at=NOW()''',
                   (uid, nome, peso, bonus, armas_compat, nome, peso, bonus, armas_compat))
+        conn.commit()  # <<< ADICIONE ESTA LINHA!
     finally:
         if conn:
             put_conn(conn)
