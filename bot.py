@@ -1480,7 +1480,7 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "Esse item consumível é de cura, dano, munição, comida, bebida ou nenhum?\nResponda: cura/dano/municao/comida/bebida/nenhum"
             )
-    
+
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE, row=None):
     uid = update.effective_user.id
     # Recebe row do handler ou busca do banco
@@ -1489,7 +1489,7 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         c = conn.cursor()
         c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
         row = c.fetchone()
-        conn.close()
+        put_conn(conn)  # <<< CORREÇÃO AQUI
         if not row:
             return
     nome, peso, bonus, armas_compat = row
@@ -1513,7 +1513,7 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         c = conn.cursor()
         c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
         conn.commit()
-        conn.close()
+        put_conn(conn)  # <<< CORREÇÃO AQUI
         await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
     except Exception as e:
         await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
@@ -1544,14 +1544,14 @@ async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = conn.cursor()
         c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
         conn.commit()
-        conn.close()
+        put_conn(conn)  # <<< CORREÇÃO AQUI
         return
     # Se está aguardando tipo de consumível
     conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT nome, peso, bonus, armas_compat FROM pending_consumivel WHERE user_id=%s", (uid,))
     row = c.fetchone()
-    conn.close()
+    put_conn(conn)  # <<< CORREÇÃO AQUI
     if row:
         await receber_tipo_consumivel(update, context, row=row)
         return
