@@ -1389,20 +1389,20 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Quantos pontos de sede esse item reduz? Envie o número.")
         context.user_data['pending_tipo_consumivel'] = ("bebida", nome, peso, bonus, armas_compat)
         return
+    conn = None
     try:
         add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
-        # Remove pendência
-        conn = None
-        try:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
-        finally:
-            if conn:
-                put_conn(conn)
-                await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
-            except Exception as e:
-                await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM pending_consumivel WHERE user_id=%s", (uid,))
+        await update.message.reply_text(
+            f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}."
+        )
+    except Exception as e:
+        await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
+    finally:
+        if conn:
+            put_conn(conn)
 
 async def texto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
