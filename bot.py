@@ -59,25 +59,16 @@ ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
 EDIT_PENDING = {}
-EDIT_TIMERS = {}  # Para timeouts de edição
+EDIT_TIMERS = {}
 
 TRANSFER_PENDING = {}
 ABANDON_PENDING = {}
 LAST_RELOAD = {}
 
 KIT_BONUS = {
-    "kit basico": 1,
-    "kit básico": 1,
-    "basico": 1,
-    "básico": 1,
-    "kit intermediario": 2,
-    "kit intermediário": 2,
-    "intermediario": 2,
-    "intermediário": 2,
-    "kit avancado": 3,
-    "kit avançado": 3,
-    "avancado": 3,
-    "avançado": 3,
+    "kit basico": 1, "kit básico": 1, "basico": 1, "básico": 1,
+    "kit intermediario": 2, "kit intermediário": 2, "intermediario": 2, "intermediário": 2,
+    "kit avancado": 3, "kit avançado": 3, "avancado": 3, "avançado": 3,
 }
 
 CONSUMIVEIS = [
@@ -108,7 +99,6 @@ def get_conn():
     return conn
 
 def put_conn(conn):
-    """Devolve uma conexão para o pool."""
     POOL.putconn(conn)
 
 def init_db():
@@ -116,6 +106,8 @@ def init_db():
     try:
         conn = get_conn()
         c = conn.cursor()
+
+        # CORREÇÃO: Colunas adicionadas diretamente na criação da tabela
         c.execute('''CREATE TABLE IF NOT EXISTS players (
             id BIGINT PRIMARY KEY,
             nome TEXT,
@@ -129,8 +121,12 @@ def init_db():
             fome INTEGER DEFAULT 0,
             sede INTEGER DEFAULT 0,
             sono INTEGER DEFAULT 0,
-            traumas TEXT DEFAULT ''
+            traumas TEXT DEFAULT '',
+            ultimo_alimento TIMESTAMP DEFAULT NOW(),
+            ultima_agua TIMESTAMP DEFAULT NOW(),
+            ultimo_sono TIMESTAMP DEFAULT NOW()
         )''')
+
         c.execute('''CREATE TABLE IF NOT EXISTS usernames (
             username TEXT PRIMARY KEY,
             user_id BIGINT,
@@ -149,68 +145,49 @@ def init_db():
             valor INTEGER DEFAULT 0,
             PRIMARY KEY(player_id,nome)
         )''')
+
+        # CORREÇÃO: Tabela inventario criada com todas as colunas de uma vez
         c.execute('''CREATE TABLE IF NOT EXISTS inventario (
             player_id BIGINT,
             nome TEXT,
             peso REAL,
             quantidade INTEGER DEFAULT 1,
+            consumivel BOOLEAN DEFAULT FALSE,
+            bonus TEXT DEFAULT '0',
+            tipo TEXT DEFAULT '',
+            arma_tipo TEXT DEFAULT '',
+            arma_bonus TEXT DEFAULT '0',
+            municao_atual INTEGER DEFAULT 0,
+            municao_max INTEGER DEFAULT 0,
+            armas_compat TEXT DEFAULT '',
             PRIMARY KEY(player_id,nome)
         )''')
-        for alter in [
-            "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
-            "ADD COLUMN IF NOT EXISTS bonus TEXT DEFAULT '0'",
-            "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
-            "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
-            "ADD COLUMN IF NOT EXISTS arma_bonus TEXT DEFAULT '0'",
-            "ADD COLUMN IF NOT EXISTS municao_atual INTEGER DEFAULT 0",
-            "ADD COLUMN IF NOT EXISTS municao_max INTEGER DEFAULT 0",
-            "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''"
-        ]:
-            try:
-                c.execute(f"ALTER TABLE inventario {alter};")
-            except Exception:
-                conn.rollback()
+        
+        # CORREÇÃO: Tabela catalogo criada com todas as colunas de uma vez
         c.execute('''CREATE TABLE IF NOT EXISTS catalogo (
             nome TEXT PRIMARY KEY,
-            peso REAL
+            peso REAL,
+            consumivel BOOLEAN DEFAULT FALSE,
+            bonus TEXT DEFAULT '0',
+            tipo TEXT DEFAULT '',
+            arma_tipo TEXT DEFAULT '',
+            arma_bonus TEXT DEFAULT '0',
+            municao_atual INTEGER DEFAULT 0,
+            municao_max INTEGER DEFAULT 0,
+            armas_compat TEXT DEFAULT '',
+            rest_hunger INTEGER DEFAULT 0,
+            rest_thirst INTEGER DEFAULT 0
         )''')
-        
-        # =========== INÍCIO DA CORREÇÃO ===========
-        try:
-            # Garante que as colunas de bônus sejam do tipo TEXTO
-            c.execute("ALTER TABLE catalogo ALTER COLUMN bonus TYPE TEXT;")
-            c.execute("ALTER TABLE catalogo ALTER COLUMN arma_bonus TYPE TEXT;")
-        except psycopg2.Error:
-            # Ignora o erro se a coluna não existir ou já for do tipo correto
-            conn.rollback()
-        # =========== FIM DA CORREÇÃO ===========
 
-        for alter in [
-            "ADD COLUMN IF NOT EXISTS ultimo_alimento TIMESTAMP DEFAULT NOW()",
-            "ADD COLUMN IF NOT EXISTS ultima_agua TIMESTAMP DEFAULT NOW()",
-            "ADD COLUMN IF NOT EXISTS ultimo_sono TIMESTAMP DEFAULT NOW()"
-        ]:
-            try:
-                c.execute(f"ALTER TABLE players {alter};")
-            except Exception:
-                conn.rollback()
-
-        for alter in [
-            "ADD COLUMN IF NOT EXISTS consumivel BOOLEAN DEFAULT FALSE",
-            "ADD COLUMN IF NOT EXISTS bonus TEXT DEFAULT '0'",
-            "ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT ''",
-            "ADD COLUMN IF NOT EXISTS arma_tipo TEXT DEFAULT ''",
-            "ADD COLUMN IF NOT EXISTS arma_bonus TEXT DEFAULT '0'",
-            "ADD COLUMN IF NOT EXISTS muni_atual INTEGER DEFAULT 0",
-            "ADD COLUMN IF NOT EXISTS muni_max INTEGER DEFAULT 0",
-            "ADD COLUMN IF NOT EXISTS armas_compat TEXT DEFAULT ''",
-            "ADD COLUMN IF NOT EXISTS rest_hunger INTEGER DEFAULT 0",
-            "ADD COLUMN IF NOT EXISTS rest_thirst INTEGER DEFAULT 0"
-        ]:
-            try:
-                c.execute(f"ALTER TABLE catalogo {alter};")
-            except Exception:
-                conn.rollback()
+        # CORREÇÃO: Blocos ALTER TABLE removidos para evitar rollback indesejado.
+        # A criação agora é feita de uma só vez acima.
+        # Se precisar adicionar colunas no futuro, use blocos `try/except psycopg2.Error`
+        # para ignorar o erro caso a coluna já exista, sem usar `conn.rollback()`.
+        # Exemplo:
+        # try:
+        #     c.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS nova_coluna TEXT;")
+        # except psycopg2.Error:
+        #     conn.rollback() # Apenas para o ALTER, mas commit() precisa vir depois
 
         c.execute('''CREATE TABLE IF NOT EXISTS pending_consumivel (
             user_id BIGINT PRIMARY KEY,
@@ -251,7 +228,12 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS liberados (
             user_id BIGINT PRIMARY KEY
         )''')
+        
         conn.commit()
+    except Exception as e:
+        logger.error(f"ERRO CRÍTICO AO INICIALIZAR O BANCO DE DADOS: {e}")
+        if conn:
+            conn.rollback()
     finally:
         if conn:
             put_conn(conn)
@@ -447,7 +429,7 @@ def create_player(uid, nome, username=None):
         c = conn.cursor()
         c.execute(
             "INSERT INTO players(id, nome, username, hp, sp, hp_max, sp_max) VALUES(%s, %s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT DO NOTHING",
+            "ON CONFLICT (id) DO NOTHING",
             (uid, nome, (username or None), 0, 0, 0, 0)
         )
         for a in ATRIBUTOS_LISTA:
@@ -579,29 +561,26 @@ def get_catalog_item(nome: str):
     try:
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
+        c.execute("SELECT * FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
         row = c.fetchone()
     finally:
         if conn:
             put_conn(conn)
     if not row:
         return None
-    return {
-        "nome": row[0], "peso": row[1], "consumivel": row[2], "bonus": row[3], "tipo": row[4],
-        "arma_tipo": row[5], "arma_bonus": row[6], "muni_atual": row[7], "muni_max": row[8], "armas_compat": row[9],
-        "rest_hunger": row[10], "rest_thirst": row[11]
-    }
+    # Convertendo a DictRow para um dicionário padrão
+    return dict(row)
 
-def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: str = '0', tipo: str = '', arma_tipo: str = '', arma_bonus: str = '0', muni_atual: int = 0, muni_max: int = 0, armas_compat: str = '', rest_hunger: int = 0, rest_thirst: int = 0):
+def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: str = '0', tipo: str = '', arma_tipo: str = '', arma_bonus: str = '0', municao_atual: int = 0, municao_max: int = 0, armas_compat: str = '', rest_hunger: int = 0, rest_thirst: int = 0):
     conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
         c.execute(
-            "INSERT INTO catalogo(nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat,rest_hunger,rest_thirst) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-            "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, muni_atual=%s, muni_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
-            (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst,
-             peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat, rest_hunger, rest_thirst)
+            "INSERT INTO catalogo(nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, municao_atual=%s, municao_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
+            (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst,
+             peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst)
         )
         conn.commit()
     finally:
@@ -626,7 +605,7 @@ def list_catalog():
     try:
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT nome,peso,consumivel,bonus,tipo,arma_tipo,arma_bonus,muni_atual,muni_max,armas_compat FROM catalogo ORDER BY nome COLLATE \"C\"")
+        c.execute("SELECT nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat FROM catalogo ORDER BY nome COLLATE \"C\"")
         data = c.fetchall()
         return data
     finally:
@@ -717,13 +696,13 @@ def parse_dice_notation(notation):
 def parse_roll_expr(expr):
     import re
     expr = expr.replace(" ", "")
-    m = re.match(r"^(\d*)d(\d+)(\+(\d+))?$", expr)
+    m = re.match(r"^(\d*)d(\d+)([+-]\d+)?$", expr) # Corrigido para aceitar + e -
     if not m:
         return None
     qtd = int(m.group(1)) if m.group(1) else 1
     lados = int(m.group(2))
-    bonus = int(m.group(4)) if m.group(4) else 0
-    if lados not in (4, 6, 8, 10, 12, 20) or qtd > 5 or bonus > 10:
+    bonus = int(m.group(3)) if m.group(3) else 0
+    if lados not in (4, 6, 8, 10, 12, 20) or qtd > 5 or abs(bonus) > 10:
         return None
     return qtd, lados, bonus
 
@@ -880,14 +859,9 @@ def cleanup_expired_transfers():
     while True:
         try:
             now = time.time()
-            expired_keys = []
-            for key, transfer in TRANSFER_PENDING.items():
-                if now > transfer.get('expires', now):
-                    expired_keys.append(key)
-            
+            expired_keys = [key for key, transfer in TRANSFER_PENDING.items() if now > transfer.get('expires', now)]
             for key in expired_keys:
                 TRANSFER_PENDING.pop(key, None)
-                
             time.sleep(300)
         except Exception as e:
             logger.error(f"Erro na limpeza de transferências: {e}")
@@ -899,24 +873,14 @@ def semana_atual():
     return segunda.date()
 
 def xp_por_caracteres(n):
-    if n < 500:
-        return 0
-    elif n < 1000:
-        return 10
-    elif n < 1500:
-        return 15
-    elif n < 2000:
-        return 20
-    elif n <= 2500:
-        return 25
-    elif n <= 3000:
-        return 30
-    elif n <= 3500:
-        return 35
-    elif n <= 4096:
-        return 40
-    else:
-        return 40
+    if n < 500: return 0
+    elif n < 1000: return 10
+    elif n < 1500: return 15
+    elif n < 2000: return 20
+    elif n <= 2500: return 25
+    elif n <= 3000: return 30
+    elif n <= 3500: return 35
+    else: return 40
 
 def ranking_semanal(context=None):
     semana = semana_atual()
@@ -933,14 +897,12 @@ def ranking_semanal(context=None):
             nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
             lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
         texto = "\n".join(lines)
-
         if context:
             for admin_id in ADMIN_IDS:
                 try:
                     context.bot.send_message(admin_id, texto, parse_mode='HTML')
                 except Exception as e:
                     logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
-
         c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
         conn.commit()
     finally:
@@ -959,6 +921,8 @@ def thread_reset_xp():
         time.sleep(wait)
         ranking_semanal()
 
+# ================== COMANDOS ==================
+# ... (o resto dos seus comandos, como `start`, `ficha`, etc., permanecem aqui sem alterações)
 # ================== COMANDOS ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1339,6 +1303,7 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, parse_mode="HTML")
 
+# ... (cole o resto dos seus comandos aqui, de `inventario` em diante)
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
         await acesso_negado(update)
@@ -1389,21 +1354,15 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["\u200B\n ☰  Catálogo de Itens\n\n"]
     for row in data:
         nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, muni_atual, muni_max, armas_compat = row
+        info = ""
         if arma_tipo:
-            info = f" ({arma_tipo})"
+            info += f" ({arma_tipo}, bônus: {arma_bonus})"
             if arma_tipo == 'range':
-                info += f", {muni_atual}/{muni_max}"
-            info += f" (+{arma_bonus})"
+                info += f", munição: {muni_atual}/{muni_max}"
         elif consumivel:
-            info = f" (consumível)"
-            if bonus and bonus != '0':
-                info += f" (+{bonus})"
-            if tipo:
-                info += f" [{tipo}]"
+            info += f" (consumível, tipo: {tipo or 'N/A'}, bônus: {bonus or '0'})"
             if tipo == 'municao' and armas_compat:
-                info += f" | Armas: {armas_compat}"
-        else:
-            info = ""
+                info += f" | Compatível: {armas_compat}"
         lines.append(f" — {nome} ({peso:.2f} kg){info}")
     await update.message.reply_text("\n".join(lines))
 
@@ -1429,7 +1388,7 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg.")
     except Exception as e:
         await update.message.reply_text("Erro ao adicionar item ao catálogo. Tente novamente.")
-    
+
 async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
@@ -1459,9 +1418,8 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bonus = '0'
     armas_compat = ''
     
-    # Se houver argumentos após o peso
     if len(args) > peso_idx + 1:
-        bonus = args[peso_idx + 1] # Pode ser "5" ou "1d6"
+        bonus = args[peso_idx + 1]
         if len(args) > peso_idx + 2:
             armas_compat = " ".join(args[peso_idx + 2:])
 
@@ -1499,7 +1457,6 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Tipo inválido. Use: cura, dano, municao, comida, bebida ou nenhum.")
         return
 
-    # Validações de bônus
     if tipo == "dano" and not parse_dice_notation(bonus) and bonus != '0':
         await update.message.reply_text(f"❌ Para consumíveis de dano, o bônus '{bonus}' deve ser um dado (ex: 1d6, 2d8).")
         return
@@ -1578,18 +1535,17 @@ async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     
     try:
-        # Lógica para encontrar os argumentos corretamente, mesmo com nomes compostos
-        if '/' in args[-1] and args[-3].lower() in ['melee', 'range']: # Arma range com munição
+        if '/' in args[-1] and args[-3].lower() in ['melee', 'range']:
             nome = " ".join(args[:-4])
             peso = parse_float_br(args[-4])
             arma_tipo = args[-3].lower()
-            arma_bonus = args[-2].lower() # ex: "1d8"
+            arma_bonus = args[-2].lower()
             muni_atual, muni_max = map(int, args[-1].split('/'))
-        elif args[-2].lower() in ['melee', 'range']: # Arma sem munição
+        elif args[-2].lower() in ['melee', 'range']:
             nome = " ".join(args[:-3])
             peso = parse_float_br(args[-3])
             arma_tipo = args[-2].lower()
-            arma_bonus = args[-1].lower() # ex: "1d4"
+            arma_bonus = args[-1].lower()
             muni_atual, muni_max = 0, 0
         else:
             raise ValueError("Formato de comando inválido.")
@@ -1610,7 +1566,7 @@ async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         add_catalog_item(
             nome, peso, consumivel=False, bonus='0', tipo='', arma_tipo=arma_tipo,
-            arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max
+            arma_bonus=arma_bonus, municao_atual=muni_atual, municao_max=muni_max
         )
         await update.message.reply_text(
             f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + 
@@ -1638,7 +1594,6 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Item não encontrado no catálogo.")
 
-# ========================= DAR =========================
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
         await acesso_negado(update)
@@ -1707,7 +1662,6 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# ========================= CALLBACK DAR =========================
 async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1723,9 +1677,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if transfer['alvo'] != user_id:
             await query.answer("Só quem vai receber pode confirmar!", show_alert=True)
             return
-        if user_id not in (transfer['doador'], transfer['alvo']):
-            await query.answer("Só quem está envolvido pode cancelar!", show_alert=True)
-            return
         if time.time() > transfer['expires']:
             TRANSFER_PENDING.pop(transfer_key, None)
             await query.edit_message_text("❌ Transferência expirada.")
@@ -1739,97 +1690,47 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_conn()
         c = conn.cursor()
         try:
-            c.execute(
-                "SELECT quantidade, peso, municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (doador, item)
-            )
+            c.execute("SELECT quantidade, peso, municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (doador, item))
             row = c.fetchone()
-
-            municao_atual, municao_max = 0, 0
-            peso_item = 0
-
+            municao_atual, municao_max, peso_item = 0, 0, 0
             if row:
-                qtd_doador, peso_item, municao_atual, municao_max = row
+                qtd_doador, peso_item, municao_atual, municao_max = row['quantidade'], row['peso'], row.get('municao_atual', 0), row.get('municao_max', 0)
                 nova_qtd_doador = qtd_doador - qtd
                 if nova_qtd_doador <= 0:
-                    c.execute(
-                        "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                        (doador, item)
-                    )
+                    c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (doador, item))
                 else:
-                    c.execute(
-                        "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                        (nova_qtd_doador, doador, item)
-                    )
-            else:
-                if is_admin(doador):
-                    item_info = get_catalog_item(item)
-                    if not item_info:
-                        conn.close()
-                        await query.edit_message_text("❌ Item não encontrado no catálogo.")
-                        TRANSFER_PENDING.pop(transfer_key, None)
-                        return
-                    peso_item = item_info["peso"]
-                    municao_atual = item_info.get("muni_atual", 0)
-                    municao_max = item_info.get("muni_max", 0)
-                else:
+                    c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova_qtd_doador, doador, item))
+            elif is_admin(doador):
+                item_info = get_catalog_item(item)
+                if not item_info:
                     conn.close()
-                    await query.edit_message_text("❌ Doador não possui o item.")
-                    TRANSFER_PENDING.pop(transfer_key, None)
+                    await query.edit_message_text("❌ Item não encontrado no catálogo.")
                     return
-
-            c.execute(
-                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (alvo, item)
-            )
-            row_tgt = c.fetchone()
-            item_info = get_catalog_item(item)
-
-            if row_tgt:
-                nova_qtd_tgt = row_tgt[0] + qtd
-                c.execute(
-                    "UPDATE inventario SET quantidade=%s, peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, municao_atual=%s, municao_max=%s, armas_compat=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (
-                        nova_qtd_tgt, item_info["peso"],
-                        item_info.get("consumivel", False),
-                        item_info.get("bonus", '0'),
-                        item_info.get("tipo", ""),
-                        item_info.get("arma_tipo", ""),
-                        item_info.get("arma_bonus", '0'),
-                        municao_atual,
-                        municao_max,
-                        item_info.get("armas_compat", ""),
-                        alvo, item
-                    )
-                )
+                peso_item = item_info["peso"]
+                municao_atual = item_info.get("municao_atual", 0)
+                municao_max = item_info.get("municao_max", 0)
             else:
-                c.execute(
-                    "INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (
-                        alvo, item_info["nome"], item_info["peso"], qtd,
-                        item_info.get("consumivel", False),
-                        item_info.get("bonus", '0'),
-                        item_info.get("tipo", ""),
-                        item_info.get("arma_tipo", ""),
-                        item_info.get("arma_bonus", '0'),
-                        municao_atual,
-                        municao_max,
-                        item_info.get("armas_compat", "")
-                    )
-                )
+                conn.close()
+                await query.edit_message_text("❌ Doador não possui o item.")
+                return
 
+            c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (alvo, item))
+            row_tgt = c.fetchone()
+            item_info_cat = get_catalog_item(item)
+            if row_tgt:
+                nova_qtd_tgt = row_tgt['quantidade'] + qtd
+                c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova_qtd_tgt, alvo, item))
+            else:
+                c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                          (alvo, item_info_cat["nome"], item_info_cat["peso"], qtd, item_info_cat.get("consumivel", False), item_info_cat.get("bonus", '0'), item_info_cat.get("tipo", ""), item_info_cat.get("arma_tipo", ""), item_info_cat.get("arma_bonus", '0'), municao_atual or 0, municao_max or 0, item_info_cat.get("armas_compat", "")))
             conn.commit()
         except Exception as e:
             conn.rollback()
-            conn.close()
             logger.error(f"Erro na transferência: {e}")
             await query.edit_message_text("❌ Ocorreu um erro ao transferir o item.")
-            TRANSFER_PENDING.pop(transfer_key, None)
-            return
         finally:
             conn.close()
-
-        TRANSFER_PENDING.pop(transfer_key, None)
+            TRANSFER_PENDING.pop(transfer_key, None)
 
         giver_after = get_player(doador)
         target_after = get_player(alvo)
@@ -1837,14 +1738,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_target = peso_total(target_after)
         excesso = max(0, total_target - target_after['peso_max'])
         aviso_sobrecarga = f"\n  ⚠️ {target_after['nome']} está com sobrecarga de {excesso:.1f} kg!" if excesso else ""
-
-        await query.edit_message_text(
-            f"✅ Transferência confirmada! {item} x{qtd} entregue.\n"
-            f"📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n"
-            f"📦 {target_after['nome']}: {total_target:.1f}/{target_after['peso_max']} kg"
-            f"{aviso_sobrecarga}"
-        )
-
+        await query.edit_message_text(f"✅ Transferência confirmada! {item} x{qtd} entregue.\n📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n📦 {target_after['nome']}: {total_target:.1f}/{target_after['peso_max']} kg{aviso_sobrecarga}")
     elif data.startswith("cancel_dar_"):
         transfer_key = data.replace("cancel_dar_", "")
         transfer = TRANSFER_PENDING.get(transfer_key)
@@ -1852,11 +1746,11 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Transferência não encontrada.")
             return
         if user_id not in (transfer['doador'], transfer['alvo']):
+            await query.answer("Apenas os envolvidos podem cancelar.", show_alert=True)
             return
         TRANSFER_PENDING.pop(transfer_key, None)
         await query.edit_message_text("❌ Transferência cancelada.")
 
-# ========================= COMANDO ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
         await acesso_negado(update)
@@ -1887,7 +1781,6 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
     
-# ========================= CALLBACK ABANDONAR =========================
 async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -1897,72 +1790,29 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(parts) < 5:
             await query.edit_message_text("❌ Dados inválidos.")
             return
-        _, _, uid_str, item_nome, qtd = parts
+        _, _, uid_str, item_nome_enc, qtd_str = parts
         uid = int(uid_str)
-        item_nome = unquote(item_nome)
-        qtd = int(qtd)
+        item_nome = unquote(item_nome_enc)
+        qtd = int(qtd_str)
         
         if query.from_user.id != uid:
             await query.answer("Só o dono pode confirmar!", show_alert=True)
             return
-
-        conn = None
-        try:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute(
-                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                (uid, item_nome)
-            )
-            row = c.fetchone()
-            if not row:
-                await query.edit_message_text("❌ Item não encontrado no inventário.")
-                return
-            qtd_inv = row[0]
-            if qtd >= qtd_inv:
-                c.execute(
-                    "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (uid, item_nome)
-                )
-            else:
-                c.execute(
-                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (qtd_inv - qtd, uid, item_nome)
-                )
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Erro ao abandonar item: {e}")
+        
+        ok = adjust_item_quantity(uid, item_nome, -qtd)
+        if ok:
+            jogador = get_player(uid)
+            total_peso = peso_total(jogador)
+            await query.edit_message_text(f"✅ '{item_nome}' x{qtd} foi abandonado.\n📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg")
+        else:
             await query.edit_message_text("❌ Erro ao abandonar o item.")
-            return
-        finally:
-            if conn:
-                put_conn(conn)
-
-        jogador = get_player(uid)
-        total_peso = peso_total(jogador)
-
-        await query.edit_message_text(
-            f"✅ '{item_nome}' x{qtd} foi abandonado.\n"
-            f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
-        )
 
     elif data.startswith("cancel_abandonar_"):
-        try:
-            uid = int(data.split("_")[-1])
-        except ValueError:
-            await query.edit_message_text("❌ Dados inválidos.")
-            return
-
+        uid = int(data.split("_")[-1])
         if query.from_user.id != uid:
             await query.answer("Só o dono pode cancelar!", show_alert=True)
             return
-
-        await query.answer()
         await query.edit_message_text("❌ Ação cancelada.")
-
-    else:
-        await query.answer("Callback inválido.", show_alert=True)
 
 async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
@@ -1980,10 +1830,10 @@ async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not m:
         await update.message.reply_text("Use: /recarregar NomeDaMunição : NomeDaArma xQuantidade")
         return
-    item_municao = m.group(1).strip()
-    item_arma = m.group(2).strip()
-    qtd_str = m.group(3) or m.group(4)
-    qtd = int(qtd_str) if qtd_str else 1
+    item_municao, item_arma, qtd_str1, qtd_str2 = m.groups()
+    item_municao = item_municao.strip()
+    item_arma = item_arma.strip()
+    qtd = int(qtd_str1 or qtd_str2 or 1)
 
     item_nome, _, qtd_inv = buscar_item_inventario(uid, item_municao)
     if not item_nome or qtd_inv < 1:
@@ -2010,11 +1860,7 @@ async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     player = get_player(uid)
-    arma_obj = None
-    for i in player["inventario"]:
-        if normalizar(i["nome"]) == normalizar(arma_nome):
-            arma_obj = i
-            break
+    arma_obj = next((i for i in player["inventario"] if normalizar(i["nome"]) == normalizar(arma_nome)), None)
     if not arma_obj:
         await update.message.reply_text("❌ Arma não encontrada no inventário.")
         return
@@ -2026,27 +1872,14 @@ async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     recarregar_max = min(qtd, qtd_inv, mun_max - mun_atual)
     if recarregar_max < 1:
-        await update.message.reply_text("❌ Não é possível recarregar essa quantidade (verifique munição e espaço).")
+        await update.message.reply_text("❌ Não é possível recarregar essa quantidade.")
         return
 
     global LAST_RELOAD
     LAST_RELOAD[uid] = (item_nome, arma_nome, recarregar_max)
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_recarregar_{uid}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")
-        ]
-    ]
+    keyboard = [[InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_recarregar_{uid}"), InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\n"
-        f"Quantidade: <b>{recarregar_max}</b>\n"
-        f"Estado atual: <b>{mun_atual}/{mun_max} balas</b>.\n"
-        "Confirma?",
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
+    await update.message.reply_text(f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\nQuantidade: <b>{recarregar_max}</b>\nEstado atual: <b>{mun_atual}/{mun_max} balas</b>.\nConfirma?", reply_markup=reply_markup, parse_mode="HTML")
 
 async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2054,47 +1887,23 @@ async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE
     uid = query.from_user.id
 
     global LAST_RELOAD
+    reload_data = LAST_RELOAD.pop(uid, None)
+    if not reload_data:
+        await query.edit_message_text("❌ Dados de recarga não encontrados ou expirados.")
+        return
 
     if data == f"confirm_recarregar_{uid}":
-        reload_data = LAST_RELOAD.get(uid)
-        if not reload_data or len(reload_data) != 3:
-            await query.edit_message_text("❌ Dados de recarga não encontrados.")
-            return
         municao, arma, qtd = reload_data
-
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
-        row = c.fetchone()
-        if not row or row[0] < qtd:
-            conn.close()
-            await query.edit_message_text("❌ Munição insuficiente.")
-            return
-        nova = row[0] - qtd
-        if nova <= 0:
-            c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, municao))
-        else:
-            c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, municao))
-
-        c.execute("SELECT municao_atual, municao_max FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, arma))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            await query.edit_message_text("❌ Arma não encontrada no inventário.")
-            return
-        mun_atual, mun_max = row
+        adjust_item_quantity(uid, municao, -qtd)
+        player = get_player(uid)
+        arma_obj = next((i for i in player["inventario"] if normalizar(i["nome"]) == normalizar(arma)), None)
+        mun_atual = arma_obj.get("municao_atual", 0)
+        mun_max = arma_obj.get("municao_max", 0)
         novo_mun = min(mun_max, mun_atual + qtd)
-        c.execute("UPDATE inventario SET municao_atual=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (novo_mun, uid, arma))
-        conn.commit()
-        conn.close()
+        update_weapon_ammo(uid, arma, novo_mun)
         await query.edit_message_text(f"🔫 <b>{arma}</b> recarregada! [{mun_atual} → {novo_mun}/{mun_max}] balas.", parse_mode="HTML")
-        LAST_RELOAD.pop(uid, None)
-        return
-
-    elif data == f"cancel_recarregar_{uid}":
-        LAST_RELOAD.pop(uid, None)
+    else:
         await query.edit_message_text("❌ Recarga cancelada.")
-        return
 
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
@@ -2219,7 +2028,7 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bonus_consumivel_roll = roll_dados(dice_params[0], dice_params[1])
                     bonus_consumivel = sum(bonus_consumivel_roll)
                     bonus_consumivel_str = f" ({consumable_bonus_notation}): {bonus_consumivel_roll} -> {bonus_consumivel}"
-                    adjust_item_quantity(uid, item_nome, -1) # Consome o item
+                    adjust_item_quantity(uid, item_nome, -1)
                 else:
                     await update.message.reply_text("❌ Consumível de dano com formato de bônus inválido.")
                     return
@@ -2499,7 +2308,7 @@ async def inconsciente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not is_liberado(update.effective_user.id):
         await acesso_negado(update)
-        return
+        return False
     if not anti_spam(update.effective_user.id) and not consumir_reroll:
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return False
@@ -2517,49 +2326,39 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     if re.match(r"^(\d+)?d\d+([+-]\d+)?$", key.lower()):
         parsed = parse_roll_expr(key)
         if not parsed:
-            await update.message.reply_text(
-                "Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +10."
-            )
+            await update.message.reply_text("Rolagem inválida! Use /roll d4, /roll 2d6, /roll d20+2, máx 5 dados, máx bônus +/-10.")
             return False
         qtd, lados, bonus = parsed
         dados = [random.randint(1, lados) for _ in range(qtd)]
         total = sum(dados) + bonus
-        await update.message.reply_text(
-            f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total}"
-        )
+        bonus_str = f"+{bonus}" if bonus >= 0 else str(bonus)
+        await update.message.reply_text(f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: {bonus_str}\nTotal: {total}")
         return True
 
     bonus = 0
-    found = False
-    real_key = key
+    real_key = ""
     penal = 0
     if key_norm in ATRIBUTOS_NORMAL:
         real_key = ATRIBUTOS_NORMAL[key_norm]
         bonus += player['atributos'].get(real_key, 0)
-        found = True
         if real_key in ("Força", "Agilidade"):
             penal = penalidade_sobrecarga(player)
             bonus += penal
     elif key_norm in PERICIAS_NORMAL:
         real_key = PERICIAS_NORMAL[key_norm]
         bonus += player['pericias'].get(real_key, 0)
-        found = True
         if real_key in ("Furtividade", "Reflexo"):
             penal = penalidade_sobrecarga(player)
             bonus += penal
     else:
-        await update.message.reply_text(
-            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
-        )
+        await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
         return False
 
-    dados = roll_dados()
+    dados = roll_dados(1, 20)
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
     penal_msg = f" (Penalidade de sobrecarga: {penal})" if penal else ""
-    await update.message.reply_text(
-        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}\nTotal: {total} → {res}"
-    )
+    await update.message.reply_text(f"🎲 /roll {real_key}\nRolagem: {dados[0]}\nBônus: +{bonus}{penal_msg}\nTotal: {total} → {res}")
     return True
 
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2585,10 +2384,7 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ok:
         novos_rerolls = player['rerolls'] - 1
         update_player_field(uid, 'rerolls', novos_rerolls)
-
-        await update.message.reply_text(
-            f"🔄 Reroll usado! Rerolls restantes: {novos_rerolls}"
-        )
+        await update.message.reply_text(f"🔄 Reroll usado! Rerolls restantes: {novos_rerolls}")
 
 async def xp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
@@ -2607,11 +2403,11 @@ async def xp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streak = row[1] if row else 0
     c.execute("SELECT data, caracteres, mencoes FROM turnos WHERE player_id=%s AND data >= %s ORDER BY data", (uid, semana))
     dias = c.fetchall()
+    conn.close()
     lines = [f"📊 <b>Seu XP semanal:</b> {xp_total} XP", f"Streak atual: {streak} dias"]
-    for d in dias:
-        data, chars, menc = d
+    for d_data, chars, menc in dias:
         xp_chars = xp_por_caracteres(chars)
-        lines.append(f"📅 {data.strftime('%d/%m')}: {xp_chars} XP ({chars} caracteres)" + (f" | Menções: {menc}" if menc else ""))
+        lines.append(f"📅 {d_data.strftime('%d/%m')}: {xp_chars} XP ({chars} caracteres)" + (f" | Menções: {menc}" if menc else ""))
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     keyboard = [[InlineKeyboardButton("Ver ranking semanal 🏆", callback_data="ver_ranking")]]
@@ -2635,21 +2431,9 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_conn()
     c = conn.cursor()
 
-    c.execute("""
-        SELECT player_id, xp_total, streak_atual
-        FROM xp_semana
-        WHERE semana_inicio=%s
-        ORDER BY xp_total DESC
-        LIMIT 10
-    """, (semana,))
+    c.execute("SELECT player_id, xp_total, streak_atual FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 10", (semana,))
     top = c.fetchall()
-
-    c.execute("""
-        SELECT player_id, xp_total, streak_atual
-        FROM xp_semana
-        WHERE semana_inicio=%s
-        ORDER BY xp_total DESC
-    """, (semana,))
+    c.execute("SELECT player_id, xp_total, streak_atual FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC", (semana,))
     ranking_full = c.fetchall()
     conn.close()
 
@@ -2660,29 +2444,26 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     medals = ['🥇', '🥈', '🥉']
 
     for idx, (pid, xp, streak) in enumerate(top):
-        nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
-        medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+        nome = players.get(pid, {}).get('nome', f"ID:{pid}")
+        medal = medals[idx] if idx < 3 else f"{idx+1}."
         highlight = " <b>(Você)</b>" if pid == uid else ""
         lines.append(f"{medal} <b>{nome}</b> — {xp} XP | 🔥 Streak: {streak}d{highlight}")
 
     if not top:
         lines.append("Ninguém tem XP ainda nesta semana!")
 
-    if uid not in [pid for pid, _, _ in top]:
+    if uid not in {pid for pid, _, _ in top}:
         for pos, (pid, xp, streak) in enumerate(ranking_full, start=1):
             if pid == uid:
-                nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
-                lines.append(
-                    f"\n➡️ Sua posição: {pos}º — <b>{nome}</b> — {xp} XP | 🔥 Streak: {streak}d"
-                )
+                nome = players.get(pid, {}).get('nome', f"ID:{pid}")
+                lines.append(f"\n➡️ Sua posição: {pos}º — <b>{nome}</b> — {xp} XP | 🔥 Streak: {streak}d")
                 break
 
     text = "\n".join(lines)
-
-    if update.message:
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, parse_mode="HTML")
+    else:
         await update.message.reply_text(text, parse_mode="HTML")
-    elif update.callback_query:
-        await update.callback_query.message.reply_text(text, parse_mode="HTML")
 
 async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_liberado(update.effective_user.id):
@@ -2719,8 +2500,7 @@ async def dormir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hp_antes = player.get("hp", 0)
     sp_antes = player.get("sp", 0)
 
-    sono_total = max(sono_antes, 1)
-    proporcao = sono_recuperado / sono_total if sono_antes > 0 else 0
+    proporcao = sono_recuperado / max(sono_antes, 1)
 
     rec_hp = int(hp_max * 0.2 * proporcao)
     rec_sp = int(sp_max * 0.2 * proporcao)
@@ -2761,9 +2541,7 @@ async def checar_alerta_necessidades(uid, bot):
         except Exception:
             pass
 
-# ================== FLASK ==================
 flask_app = Flask(__name__)
-
 @flask_app.route("/")
 def home():
     return "Bot online!"
@@ -2771,16 +2549,10 @@ def home():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000)
 
-# ========== MAIN ==========
 def main():
     global POOL
     try:
-        POOL = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=10,
-            dsn=DATABASE_URL,
-            cursor_factory=psycopg2.extras.DictCursor
-        )
+        POOL = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
         print("✅ Pool de conexões com o banco de dados iniciado com sucesso.")
     except Exception as e:
         logger.error(f"❌ Falha ao iniciar o pool de conexões: {e}")
@@ -2792,39 +2564,43 @@ def main():
     threading.Thread(target=cleanup_expired_transfers, daemon=True).start()
     threading.Thread(target=thread_reset_xp, daemon=True).start()
     threading.Thread(target=reset_coma_teste, daemon=True).start()
+    
     app = Application.builder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("liberar", liberar))
+    app.add_handler(CommandHandler("desliberar", desliberar))
     app.add_handler(CommandHandler("ficha", ficha))
     app.add_handler(CommandHandler("verficha", verficha))
+    app.add_handler(CommandHandler("editarficha", editarficha))
     app.add_handler(CommandHandler("inventario", inventario))
     app.add_handler(CommandHandler("itens", itens))
     app.add_handler(CommandHandler("additem", additem))
-    app.add_handler(CommandHandler("addarma", addarma))
     app.add_handler(CommandHandler("addconsumivel", addconsumivel))
+    app.add_handler(CommandHandler("addarma", addarma))
     app.add_handler(CommandHandler("delitem", delitem))
     app.add_handler(CommandHandler("dar", dar))
     app.add_handler(CallbackQueryHandler(transfer_callback, pattern=r'^(confirm_dar_|cancel_dar_)'))
     app.add_handler(CommandHandler("abandonar", abandonar))
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar_'))
-    app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CommandHandler("recarregar", recarregar))
     app.add_handler(CallbackQueryHandler(callback_recarregar, pattern=r'^(confirm_recarregar_|cancel_recarregar_)'))
+    app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
     app.add_handler(CommandHandler("inconsciente", inconsciente))
-    app.add_handler(CommandHandler("liberar", liberar))
-    app.add_handler(CommandHandler("desliberar", desliberar))
     app.add_handler(CommandHandler("roll", roll))
     app.add_handler(CommandHandler("reroll", reroll))
-    app.add_handler(CommandHandler("editarficha", editarficha))
     app.add_handler(CommandHandler("turno", turno))
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("dormir", dormir))
+    
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), texto_handler))
+    
     app.run_polling()
 
 if __name__ == "__main__":
