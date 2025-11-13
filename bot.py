@@ -1402,22 +1402,25 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args
+
+    # procura o primeiro token que represente um peso (esquerda -> direita)
     peso_idx = -1
-    for i in range(len(args) -1, -1, -1):
-        if parse_float_br(args[i]):
+    for i, token in enumerate(args):
+        if parse_float_br(token) is not None:
             peso_idx = i
             break
-            
+
     if peso_idx == -1:
         await update.message.reply_text("❌ Peso inválido. Use um número como 0.5 ou 2,5.")
         return
 
-    nome = " ".join(args[:peso_idx])
+    nome = " ".join(args[:peso_idx]).strip()
     peso = parse_float_br(args[peso_idx])
-    
+
     bonus = '0'
     armas_compat = ''
-    
+
+    # token imediatamente após o peso é interpretado como bônus (se houver)
     if len(args) > peso_idx + 1:
         bonus = args[peso_idx + 1]
         if len(args) > peso_idx + 2:
