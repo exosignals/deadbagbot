@@ -571,14 +571,14 @@ def get_catalog_item(nome: str):
     # Convertendo a DictRow para um dicionário padrão
     return dict(row)
 
-def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: str = '0', tipo: str = '', arma_tipo: str = '', arma_bonus: str = '0', municao_atual: int = 0, municao_max: int = 0, armas[...]
+def add_catalog_item(nome: str, peso: float, consumivel: bool = False, bonus: str = '0', tipo: str = '', arma_tipo: str = '', arma_bonus: str = '0', municao_atual: int = 0, municao_max: int = 0, armas_compat: str = '', rest_hunger: int = 0, rest_thirst: int = 0):
     conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
         c.execute(
-            "INSERT INTO catalogo(nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst) VALUES(%s, %s, %s, %s, %s, %s, %s, %s,[...]
-            "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, municao_atual=%s, municao_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s"[...]
+            "INSERT INTO catalogo(nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (nome) DO UPDATE SET peso=%s, consumivel=%s, bonus=%s, tipo=%s, arma_tipo=%s, arma_bonus=%s, municao_atual=%s, municao_max=%s, armas_compat=%s, rest_hunger=%s, rest_thirst=%s",
             (nome, peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst,
              peso, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat, rest_hunger, rest_thirst)
         )
@@ -1079,8 +1079,8 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (mencionado_id, semana))
                             interacoes_bonificadas.add(par)
                             try:
-                                await context.bot.send_message(uid, f"🎉 Você e @{mencionado} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTM[...]
-                                await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_m[...]
+                                await context.bot.send_message(uid, f"🎉 Você e @{mencionado} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
+                                await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
                             except Exception as e:
                                 logger.warning(f"Falha ao enviar mensagem privada de bônus: {e}")
 
@@ -1123,7 +1123,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     penal = penalidade_sobrecarga(player)
     if penal:
         text += f"⚠︎ Penalidade ativa: {penal} em Força, Agilidade e Furtividade!\n"
-    text += "<blockquote>Para editar Atributos e Perícias, utilize o comando /editarficha.</blockquote>\n<blockquote>Para gerenciar seu Inventário, utilize o comando /inventario.</blockquote>\n\u200[...]
+    text += "<blockquote>Para editar Atributos e Perícias, utilize o comando /editarficha.</blockquote>\n<blockquote>Para gerenciar seu Inventário, utilize o comando /inventario.</blockquote>\n\u200B"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1160,7 +1160,7 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         campos_ficha += f"{p}: \n"
 
     text = (
-        "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n[...]
+        "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n\n"
         " ⤷ <b>EXEMPLO</b>\n\n<blockquote>Força: 3\nImproviso: 2\nMedicina: 1</blockquote>\n\n"
         "TODOS os Atributos e Perícias, é só copiar, colar, preencher e enviar!\n\n"
         f"<pre>{campos_ficha}</pre>\n"
@@ -1402,34 +1402,26 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args
-
-    # Procura o primeiro token que represente o peso (esquerda -> direita).
-    # Isso evita que valores adicionais (como bônus) no final "puxem" o peso incorretamente.
     peso_idx = -1
-    for i, token in enumerate(args):
-        if parse_float_br(token) is not None:
+    for i in range(len(args) -1, -1, -1):
+        if parse_float_br(args[i]):
             peso_idx = i
             break
-
+            
     if peso_idx == -1:
         await update.message.reply_text("❌ Peso inválido. Use um número como 0.5 ou 2,5.")
         return
 
-    nome = " ".join(args[:peso_idx]).strip()
+    nome = " ".join(args[:peso_idx])
     peso = parse_float_br(args[peso_idx])
-
+    
     bonus = '0'
     armas_compat = ''
-
-    # Se houver token após o peso, considera-o como bônus; o restante é armas_compat (se houver).
+    
     if len(args) > peso_idx + 1:
         bonus = args[peso_idx + 1]
         if len(args) > peso_idx + 2:
             armas_compat = " ".join(args[peso_idx + 2:])
-
-    if not nome:
-        await update.message.reply_text("❌ Nome inválido. Uso: /addconsumivel NomeDoItem Peso [bonus] [armas_compat]")
-        return
 
     conn = None
     try:
@@ -1729,8 +1721,8 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 nova_qtd_tgt = row_tgt['quantidade'] + qtd
                 c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova_qtd_tgt, alvo, item))
             else:
-                c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,[...]
-                          (alvo, item_info_cat["nome"], item_info_cat["peso"], qtd, item_info_cat.get("consumivel", False), item_info_cat.get("bonus", '0'), item_info_cat.get("tipo", ""), item_info_ca[...]
+                c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade, consumivel, bonus, tipo, arma_tipo, arma_bonus, municao_atual, municao_max, armas_compat) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                          (alvo, item_info_cat["nome"], item_info_cat["peso"], qtd, item_info_cat.get("consumivel", False), item_info_cat.get("bonus", '0'), item_info_cat.get("tipo", ""), item_info_cat.get("arma_tipo", ""), item_info_cat.get("arma_bonus", '0'), municao_atual or 0, municao_max or 0, item_info_cat.get("armas_compat", "")))
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -1746,7 +1738,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_target = peso_total(target_after)
         excesso = max(0, total_target - target_after['peso_max'])
         aviso_sobrecarga = f"\n  ⚠️ {target_after['nome']} está com sobrecarga de {excesso:.1f} kg!" if excesso else ""
-        await query.edit_message_text(f"✅ Transferência confirmada! {item} x{qtd} entregue.\n📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n📦 {target_after['nome']}:[...]
+        await query.edit_message_text(f"✅ Transferência confirmada! {item} x{qtd} entregue.\n📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n📦 {target_after['nome']}: {total_target:.1f}/{target_after['peso_max']} kg{aviso_sobrecarga}")
     elif data.startswith("cancel_dar_"):
         transfer_key = data.replace("cancel_dar_", "")
         transfer = TRANSFER_PENDING.get(transfer_key)
@@ -1887,7 +1879,7 @@ async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     LAST_RELOAD[uid] = (item_nome, arma_nome, recarregar_max)
     keyboard = [[InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_recarregar_{uid}"), InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_recarregar_{uid}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\nQuantidade: <b>{recarregar_max}</b>\nEstado atual: <b>{mun_atual}/{mun_max} balas</b>[...]
+    await update.message.reply_text(f"Você está prestes a recarregar <b>{arma_nome}</b> com <b>{item_nome}</b>.\nQuantidade: <b>{recarregar_max}</b>\nEstado atual: <b>{mun_atual}/{mun_max} balas</b>.\nConfirma?", reply_markup=reply_markup, parse_mode="HTML")
 
 async def callback_recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
